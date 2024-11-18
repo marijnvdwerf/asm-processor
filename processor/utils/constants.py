@@ -1,3 +1,6 @@
+MAX_FN_SIZE = 100
+SLOW_CHECKS = False
+
 # ELF Header constants
 EI_NIDENT     = 16
 EI_CLASS      = 4
