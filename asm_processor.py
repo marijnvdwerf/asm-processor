@@ -20,6 +20,8 @@ from processor.utils.errors import Failure
 from processor.asm.function import Function
 from processor.asm import GlobalAsmBlock
 
+from processor.utils.options import Opts
+
 MAX_FN_SIZE = 100
 SLOW_CHECKS = False
 
@@ -115,8 +117,6 @@ float_regexpr = re.compile(r"[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?f")
 
 def repl_float_hex(m):
     return str(struct.unpack(">I", struct.pack(">f", float(m.group(0).strip().rstrip("f"))))[0])
-
-Opts = namedtuple('Opts', ['opt', 'framepointer', 'mips1', 'kpic', 'pascal', 'input_enc', 'output_enc', 'enable_cutscene_data_float_encoding'])
 
 def parse_source(f, opts, out_dependencies, print_source=None):
     if opts.opt in ['O1', 'O2']:
