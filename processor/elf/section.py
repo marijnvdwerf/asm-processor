@@ -1,9 +1,10 @@
-from ..utils.constants import *
-from . import symbol
-from . import relocation
+from ..utils.constants import SHF_LINK_ORDER, SHT_STRTAB, SHT_SYMTAB, SHT_REL, SHT_RELA, SHT_MIPS_DEBUG, SHT_NOBITS
+from .symbol import Symbol
+from .relocation import Relocation
 
 class Section:
-    """typedef struct {
+    """
+    typedef struct {
         Elf32_Word   sh_name;
         Elf32_Word   sh_type;
         Elf32_Word   sh_flags;
@@ -14,7 +15,9 @@ class Section:
         Elf32_Word   sh_info;
         Elf32_Word   sh_addralign;
         Elf32_Word   sh_entsize;
-    } Elf32_Shdr;"""
+    } Elf32_Shdr;
+    """
+
     def __init__(self, fmt, header, data, index):
         self.fmt = fmt
         self.sh_name, self.sh_type, self.sh_flags, self.sh_addr, self.sh_offset, self.sh_size, self.sh_link, self.sh_info, self.sh_addralign, self.sh_entsize = fmt.unpack('IIIIIIIIII', header)
@@ -51,45 +54,43 @@ class Section:
     def header_to_bin(self):
         if self.sh_type != SHT_NOBITS:
             self.sh_size = len(self.data)
-        return self.fmt.pack('IIIIIIIIII',
-            self.sh_name, self.sh_type, self.sh_flags, self.sh_addr,
-            self.sh_offset, self.sh_size, self.sh_link, self.sh_info,
-            self.sh_addralign, self.sh_entsize)
+        return self.fmt.pack('IIIIIIIIII', self.sh_name, self.sh_type, self.sh_flags, self.sh_addr, self.sh_offset, self.sh_size, self.sh_link, self.sh_info, self.sh_addralign, self.sh_entsize)
 
     def late_init(self, sections):
         if self.sh_type == SHT_SYMTAB:
             self.init_symbols(sections)
         elif self.is_rel():
+            self.rel_target = sections[self.sh_info]
+            self.rel_target.relocated_by.append(self)
             self.init_relocs()
 
     def find_symbol(self, name):
         assert self.sh_type == SHT_SYMTAB
         for s in self.symbol_entries:
             if s.name == name:
-                return s
+                return (s.st_shndx, s.st_value)
         return None
 
     def find_symbol_in_section(self, name, section):
-        assert self.sh_type == SHT_SYMTAB
-        for s in self.symbol_entries:
-            if s.st_shndx == section.index and s.name == name:
-                return s
-        return None
+        pos = self.find_symbol(name)
+        assert pos is not None
+        assert pos[0] == section.index
+        return pos[1]
 
     def init_symbols(self, sections):
         assert self.sh_type == SHT_SYMTAB
         assert self.sh_entsize == 16
         self.strtab = sections[self.sh_link]
         entries = []
-        for pos in range(0, self.sh_size, self.sh_entsize):
-            entries.append(symbol.Symbol(self.fmt, self.data[pos:pos+self.sh_entsize], self.strtab))
+        for i in range(0, self.sh_size, self.sh_entsize):
+            entries.append(Symbol(self.fmt, self.data[i:i+self.sh_entsize], self.strtab))
         self.symbol_entries = entries
 
     def init_relocs(self):
-        assert self.sh_entsize in [8, 12]
+        assert self.is_rel()
         entries = []
-        for pos in range(0, self.sh_size, self.sh_entsize):
-            entries.append(relocation.Relocation(self.fmt, self.data[pos:pos+self.sh_entsize], self.sh_type))
+        for i in range(0, self.sh_size, self.sh_entsize):
+            entries.append(Relocation(self.fmt, self.data[i:i+self.sh_entsize], self.sh_type))
         self.relocations = entries
 
     def local_symbols(self):
@@ -102,63 +103,38 @@ class Section:
 
     def relocate_mdebug(self, original_offset):
         assert self.sh_type == SHT_MIPS_DEBUG
-        new_data = bytearray()
-        pos = 0
-        # Skip the header for now
-        pos += 6 * 4
-        new_data += self.data[0:pos]
-        while pos < len(self.data):
-            # Read the next "block"
-            descriptor = self.fmt.unpack('H', self.data[pos:pos+2])[0]
-            pos += 2
-            new_data += self.fmt.pack('H', descriptor)
-            # The symbol type dictates what data follows
-            if descriptor == MIPS_DEBUG_ST_STATIC:
-                val = self.fmt.unpack('III', self.data[pos:pos+12])
-                pos += 12
-                if val[1] != 0:
-                    val = (val[0], val[1] + original_offset, val[2])
-                new_data += self.fmt.pack('III', *val)
-            elif descriptor == MIPS_DEBUG_ST_STATIC_PROC:
-                val = self.fmt.unpack('IIII', self.data[pos:pos+16])
-                pos += 16
-                if val[1] != 0:
-                    val = (val[0], val[1] + original_offset, val[2], val[3])
-                new_data += self.fmt.pack('IIII', *val)
-            elif descriptor == MIPS_DEBUG_ST_END:
-                pass
-            elif descriptor == MIPS_DEBUG_ST_PROC:
-                val = self.fmt.unpack('IIII', self.data[pos:pos+16])
-                pos += 16
-                if val[1] != 0:
-                    val = (val[0], val[1] + original_offset, val[2], val[3])
-                new_data += self.fmt.pack('IIII', *val)
-            elif descriptor == MIPS_DEBUG_ST_FILE:
-                strlen = self.fmt.unpack('I', self.data[pos:pos+4])[0]
-                pos += 4
-                new_data += self.fmt.pack('I', strlen)
-                new_data += self.data[pos:pos+strlen]
-                pos += strlen
-            elif descriptor == MIPS_DEBUG_ST_BLOCK:
-                val = self.fmt.unpack('II', self.data[pos:pos+8])
-                pos += 8
-                if val[0] != 0:
-                    val = (val[0] + original_offset, val[1] + original_offset)
-                new_data += self.fmt.pack('II', *val)
-            elif descriptor in [MIPS_DEBUG_ST_STRUCT, MIPS_DEBUG_ST_UNION, MIPS_DEBUG_ST_ENUM]:
-                strlen = self.fmt.unpack('I', self.data[pos:pos+4])[0]
-                pos += 4
-                new_data += self.fmt.pack('I', strlen)
-                new_data += self.data[pos:pos+strlen]
-                pos += strlen
-                # Read the tag list
-                while True:
-                    tag = self.fmt.unpack('I', self.data[pos:pos+4])[0]
-                    pos += 4
-                    new_data += self.fmt.pack('I', tag)
-                    if tag == 0:
-                        break
-            else:
-                print("Unknown mdebug symbol type:", descriptor)
-                return None
-        self.data = new_data
+        new_data = bytearray(self.data)
+        shift_by = self.sh_offset - original_offset
+
+        # Update the file-relative offsets in the Symbolic HDRR
+        hdrr_magic, hdrr_vstamp, hdrr_ilineMax, hdrr_cbLine, \
+            hdrr_cbLineOffset, hdrr_idnMax, hdrr_cbDnOffset, hdrr_ipdMax, \
+            hdrr_cbPdOffset, hdrr_isymMax, hdrr_cbSymOffset, hdrr_ioptMax, \
+            hdrr_cbOptOffset, hdrr_iauxMax, hdrr_cbAuxOffset, hdrr_issMax, \
+            hdrr_cbSsOffset, hdrr_issExtMax, hdrr_cbSsExtOffset, hdrr_ifdMax, \
+            hdrr_cbFdOffset, hdrr_crfd, hdrr_cbRfdOffset, hdrr_iextMax, \
+            hdrr_cbExtOffset = self.fmt.unpack("HHIIIIIIIIIIIIIIIIIIIIIII", self.data[0:0x60])
+
+        assert hdrr_magic == 0x7009, "Invalid magic value for .mdebug symbolic header"
+
+        if hdrr_cbLine: hdrr_cbLineOffset += shift_by
+        if hdrr_idnMax: hdrr_cbDnOffset += shift_by
+        if hdrr_ipdMax: hdrr_cbPdOffset += shift_by
+        if hdrr_isymMax: hdrr_cbSymOffset += shift_by
+        if hdrr_ioptMax: hdrr_cbOptOffset += shift_by
+        if hdrr_iauxMax: hdrr_cbAuxOffset += shift_by
+        if hdrr_issMax: hdrr_cbSsOffset += shift_by
+        if hdrr_issExtMax: hdrr_cbSsExtOffset += shift_by
+        if hdrr_ifdMax: hdrr_cbFdOffset += shift_by
+        if hdrr_crfd: hdrr_cbRfdOffset += shift_by
+        if hdrr_iextMax: hdrr_cbExtOffset += shift_by
+
+        new_data[0:0x60] = self.fmt.pack("HHIIIIIIIIIIIIIIIIIIIIIII", hdrr_magic, hdrr_vstamp, hdrr_ilineMax, hdrr_cbLine, \
+            hdrr_cbLineOffset, hdrr_idnMax, hdrr_cbDnOffset, hdrr_ipdMax, \
+            hdrr_cbPdOffset, hdrr_isymMax, hdrr_cbSymOffset, hdrr_ioptMax, \
+            hdrr_cbOptOffset, hdrr_iauxMax, hdrr_cbAuxOffset, hdrr_issMax, \
+            hdrr_cbSsOffset, hdrr_issExtMax, hdrr_cbSsExtOffset, hdrr_ifdMax, \
+            hdrr_cbFdOffset, hdrr_crfd, hdrr_cbRfdOffset, hdrr_iextMax, \
+            hdrr_cbExtOffset)
+
+        self.data = bytes(new_data)
