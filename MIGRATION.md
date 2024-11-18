@@ -25,7 +25,7 @@ The current codebase will be split into modules while keeping actual code change
 ### Directory Structure
 
 ```
-asm_processor/
+processor/
 ├── elf/
 │   ├── __init__.py       # Exports all ELF-related classes
 │   ├── format.py         # ElfFormat: Handles big/little endian formatting
@@ -37,12 +37,13 @@ asm_processor/
 ├── asm/
 │   ├── __init__.py       # Exports ASM-related functionality
 │   ├── block.py          # GlobalAsmBlock: Assembly block processing
-│   ├── function.py       # Function namedtuple and related code
-│   └── processor.py      # parse_source and main processing logic
+│   └── function.py       # Function namedtuple and related code
 ├── utils/
 │   ├── __init__.py       # Exports utilities
 │   ├── state.py          # GlobalState: Manages processing state
 │   └── errors.py         # Failure: Error handling
+├── processor.py         # parse_source: Main source processing logic
+├── objfile.py          # fixup_objfile: Object file processing
 └── __init__.py           # Main entry point with run() function
 
 ### Key Components
