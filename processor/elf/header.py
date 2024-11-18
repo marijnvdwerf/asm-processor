@@ -1,8 +1,9 @@
-from . import format
-from ..utils.constants import *
+from .format import ElfFormat
+from ..utils.constants import EI_NIDENT, EI_DATA,EI_CLASS, SHN_UNDEF
 
 class ElfHeader:
-    """typedef struct {
+    """
+    typedef struct {
         unsigned char   e_ident[EI_NIDENT];
         Elf32_Half      e_type;
         Elf32_Half      e_machine;
@@ -17,11 +18,13 @@ class ElfHeader:
         Elf32_Half      e_shentsize;
         Elf32_Half      e_shnum;
         Elf32_Half      e_shstrndx;
-    } Elf32_Ehdr;"""
+    } Elf32_Ehdr;
+    """
+
     def __init__(self, data):
         self.e_ident = data[:EI_NIDENT]
         assert self.e_ident[EI_CLASS] == 1 # 32-bit
-        self.fmt = format.ElfFormat(is_big_endian=(self.e_ident[EI_DATA] == 2))
+        self.fmt = ElfFormat(is_big_endian=(self.e_ident[EI_DATA] == 2))
         self.e_type, self.e_machine, self.e_version, self.e_entry, self.e_phoff, self.e_shoff, self.e_flags, self.e_ehsize, self.e_phentsize, self.e_phnum, self.e_shentsize, self.e_shnum, self.e_shstrndx = self.fmt.unpack('HHIIIIIHHHHHH', data[EI_NIDENT:])
         assert self.e_type == 1 # relocatable
         assert self.e_machine == 8 # MIPS I Architecture
@@ -30,9 +33,8 @@ class ElfHeader:
         assert self.e_shstrndx != SHN_UNDEF
 
     def to_bin(self):
-        header = bytearray(self.e_ident)
-        header.extend(self.fmt.pack('HHIIIIIHHHHHH',
-            self.e_type, self.e_machine, self.e_version, self.e_entry, self.e_phoff,
-            self.e_shoff, self.e_flags, self.e_ehsize, self.e_phentsize, self.e_phnum,
-            self.e_shentsize, self.e_shnum, self.e_shstrndx))
-        return header
+        return self.e_ident + self.fmt.pack('HHIIIIIHHHHHH', self.e_type,
+                self.e_machine, self.e_version, self.e_entry, self.e_phoff,
+                self.e_shoff, self.e_flags, self.e_ehsize, self.e_phentsize,
+                self.e_phnum, self.e_shentsize, self.e_shnum, self.e_shstrndx)
+
