@@ -1,14 +1,17 @@
-from ..utils.constants import *
+from ..utils.constants import SHN_XINDEX
 
 class Symbol:
-    """typedef struct {
+    """
+    typedef struct {
         Elf32_Word      st_name;
         Elf32_Addr      st_value;
         Elf32_Word      st_size;
         unsigned char   st_info;
         unsigned char   st_other;
         Elf32_Half      st_shndx;
-    } Elf32_Sym;"""
+    } Elf32_Sym;
+    """
+
     def __init__(self, fmt, data, strtab, name=None):
         self.fmt = fmt
         self.st_name, self.st_value, self.st_size, st_info, self.st_other, self.st_shndx = fmt.unpack('IIIBBH', data)
@@ -25,6 +28,4 @@ class Symbol:
 
     def to_bin(self):
         st_info = (self.bind << 4) | self.type
-        return self.fmt.pack('IIIBBH',
-            self.st_name, self.st_value, self.st_size, st_info,
-            self.st_other, self.st_shndx)
+        return self.fmt.pack('IIIBBH', self.st_name, self.st_value, self.st_size, st_info, self.st_other, self.st_shndx)
