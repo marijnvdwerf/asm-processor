@@ -8,6 +8,7 @@ import os
 from collections import namedtuple
 from io import StringIO
 
+from processor.elf.format import ElfFormat
 MAX_FN_SIZE = 100
 SLOW_CHECKS = False
 
@@ -89,18 +90,6 @@ MIPS_DEBUG_ST_STATIC_PROC = 14
 MIPS_DEBUG_ST_STRUCT = 26
 MIPS_DEBUG_ST_UNION = 27
 MIPS_DEBUG_ST_ENUM = 28
-
-
-class ElfFormat:
-    def __init__(self, is_big_endian):
-        self.is_big_endian = is_big_endian
-        self.struct_char = ">" if is_big_endian else "<"
-
-    def pack(self, fmt, *args):
-        return struct.pack(self.struct_char + fmt, *args)
-
-    def unpack(self, fmt, data):
-        return struct.unpack(self.struct_char + fmt, data)
 
 
 class ElfHeader:
