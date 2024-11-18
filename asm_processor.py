@@ -5,19 +5,13 @@ import struct
 import sys
 import re
 import os
-from collections import namedtuple
 from io import StringIO
 
-from processor.elf.format import ElfFormat
-from processor.elf.header import ElfHeader
-from processor.elf.section import Section
 from processor.elf.symbol import Symbol
-from processor.elf.relocation import Relocation
 from processor.elf.file import ElfFile
 
 from processor.utils.state import GlobalState
 from processor.utils.errors import Failure
-from processor.asm.function import Function
 from processor.asm import GlobalAsmBlock
 
 from processor.utils.options import Opts
