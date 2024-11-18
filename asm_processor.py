@@ -11,6 +11,7 @@ from io import StringIO
 from processor.elf.format import ElfFormat
 from processor.elf.header import ElfHeader
 from processor.elf.symbol import Symbol
+from processor.elf.relocation import Relocation
 MAX_FN_SIZE = 100
 SLOW_CHECKS = False
 
@@ -92,25 +93,6 @@ MIPS_DEBUG_ST_STATIC_PROC = 14
 MIPS_DEBUG_ST_STRUCT = 26
 MIPS_DEBUG_ST_UNION = 27
 MIPS_DEBUG_ST_ENUM = 28
-
-
-class Relocation:
-    def __init__(self, fmt, data, sh_type):
-        self.fmt = fmt
-        self.sh_type = sh_type
-        if sh_type == SHT_REL:
-            self.r_offset, self.r_info = fmt.unpack('II', data)
-        else:
-            self.r_offset, self.r_info, self.r_addend = fmt.unpack('III', data)
-        self.sym_index = self.r_info >> 8
-        self.rel_type = self.r_info & 0xff
-
-    def to_bin(self):
-        self.r_info = (self.sym_index << 8) | self.rel_type
-        if self.sh_type == SHT_REL:
-            return self.fmt.pack('II', self.r_offset, self.r_info)
-        else:
-            return self.fmt.pack('III', self.r_offset, self.r_info, self.r_addend)
 
 
 class Section:
