@@ -1,3 +1,5 @@
+import struct
+
 class GlobalState:
     def __init__(self, min_instr_count, skip_instr_count, use_jtbl_for_rodata, prelude_if_late_rodata, mips1, pascal):
         # A value that hopefully never appears as a 32-bit rodata constant (or we
@@ -13,28 +15,45 @@ class GlobalState:
         self.pascal = pascal
 
     def next_late_rodata_hex(self):
-        val = self.late_rodata_hex
+        dummy_bytes = struct.pack('>I', self.late_rodata_hex)
+        if (self.late_rodata_hex & 0xffff) == 0:
+            # Avoid lui
+            self.late_rodata_hex += 1
         self.late_rodata_hex += 1
-        return val
+        return dummy_bytes
 
     def make_name(self, cat):
         self.namectr += 1
-        return f'_asmpp_{cat}_{self.namectr}'
+        return '_asmpp_{}{}'.format(cat, self.namectr)
 
     def func_prologue(self, name):
         if self.pascal:
-            return f'PROCEDURE {name}; [alias]; asregs;'
+            return " ".join([
+                "procedure {}();".format(name),
+                "type",
+                " pi = ^integer;",
+                " pf = ^single;",
+                " pd = ^double;",
+                "var",
+                " vi: pi;",
+                " vf: pf;",
+                " vd: pd;",
+                "begin",
+                " vi := vi;",
+                " vf := vf;",
+                " vd := vd;",
+            ])
         else:
-            return f'void {name}(void) {{ __asm__('
+            return 'void {}(void) {{'.format(name)
 
     def func_epilogue(self):
         if self.pascal:
-            return 'END;'
+            return "end;"
         else:
-            return '); }'
+            return "}"
 
     def pascal_assignment(self, tp, val):
-        if tp == 'float':
-            return f'CONST REAL = {val};'
-        else:
-            return f'CONST INTEGER = {val};'
+        self.valuectr += 1
+        address = (8 * self.valuectr) & 0x7FFF
+        return 'v{} := p{}({}); v{}^ := {};'.format(tp, tp, address, tp, val)
+

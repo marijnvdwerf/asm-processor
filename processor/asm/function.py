@@ -8,3 +8,4 @@ Function = namedtuple('Function', [
     'late_rodata_asm_conts',  # List of late rodata contents
     'fn_desc',                # Function descriptor (type, name)
     'data',                   # Raw data (including rodata)
+])

@@ -15,6 +15,10 @@ from processor.elf.symbol import Symbol
 from processor.elf.relocation import Relocation
 from processor.elf.file import ElfFile
 
+from processor.utils.state import GlobalState
+from processor.utils.errors import Failure
+from processor.asm.function import Function
+
 MAX_FN_SIZE = 100
 SLOW_CHECKS = False
 
@@ -114,74 +118,6 @@ def re_comment_replacer(match):
 re_comment_or_string = re.compile(
     r'#.*|/\*.*?\*/|"(?:\\.|[^\\"])*"'
 )
-
-
-class Failure(Exception):
-    def __init__(self, message):
-        self.message = message
-
-    def __str__(self):
-        return self.message
-
-
-class GlobalState:
-    def __init__(self, min_instr_count, skip_instr_count, use_jtbl_for_rodata, prelude_if_late_rodata, mips1, pascal):
-        # A value that hopefully never appears as a 32-bit rodata constant (or we
-        # miscompile late rodata). Increases by 1 in each step.
-        self.late_rodata_hex = 0xE0123456
-        self.valuectr = 0
-        self.namectr = 0
-        self.min_instr_count = min_instr_count
-        self.skip_instr_count = skip_instr_count
-        self.use_jtbl_for_rodata = use_jtbl_for_rodata
-        self.prelude_if_late_rodata = prelude_if_late_rodata
-        self.mips1 = mips1
-        self.pascal = pascal
-
-    def next_late_rodata_hex(self):
-        dummy_bytes = struct.pack('>I', self.late_rodata_hex)
-        if (self.late_rodata_hex & 0xffff) == 0:
-            # Avoid lui
-            self.late_rodata_hex += 1
-        self.late_rodata_hex += 1
-        return dummy_bytes
-
-    def make_name(self, cat):
-        self.namectr += 1
-        return '_asmpp_{}{}'.format(cat, self.namectr)
-
-    def func_prologue(self, name):
-        if self.pascal:
-            return " ".join([
-                "procedure {}();".format(name),
-                "type",
-                " pi = ^integer;",
-                " pf = ^single;",
-                " pd = ^double;",
-                "var",
-                " vi: pi;",
-                " vf: pf;",
-                " vd: pd;",
-                "begin",
-                " vi := vi;",
-                " vf := vf;",
-                " vd := vd;",
-            ])
-        else:
-            return 'void {}(void) {{'.format(name)
-
-    def func_epilogue(self):
-        if self.pascal:
-            return "end;"
-        else:
-            return "}"
-
-    def pascal_assignment(self, tp, val):
-        self.valuectr += 1
-        address = (8 * self.valuectr) & 0x7FFF
-        return 'v{} := p{}({}); v{}^ := {};'.format(tp, tp, address, tp, val)
-
-Function = namedtuple('Function', ['text_glabels', 'asm_conts', 'late_rodata_dummy_bytes', 'jtbl_rodata_size', 'late_rodata_asm_conts', 'fn_desc', 'data'])
 
 
 class GlobalAsmBlock:
