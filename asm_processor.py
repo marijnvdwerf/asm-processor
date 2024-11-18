@@ -13,6 +13,8 @@ from processor.elf.header import ElfHeader
 from processor.elf.section import Section
 from processor.elf.symbol import Symbol
 from processor.elf.relocation import Relocation
+from processor.elf.file import ElfFile
+
 MAX_FN_SIZE = 100
 SLOW_CHECKS = False
 
@@ -94,94 +96,6 @@ MIPS_DEBUG_ST_STATIC_PROC = 14
 MIPS_DEBUG_ST_STRUCT = 26
 MIPS_DEBUG_ST_UNION = 27
 MIPS_DEBUG_ST_ENUM = 28
-
-
-class ElfFile:
-    def __init__(self, data):
-        self.data = data
-        assert data[:4] == b'\x7fELF', "not an ELF file"
-
-        self.elf_header = ElfHeader(data[0:52])
-        self.fmt = self.elf_header.fmt
-
-        offset, size = self.elf_header.e_shoff, self.elf_header.e_shentsize
-        null_section = Section(self.fmt, data[offset:offset + size], data, 0)
-        num_sections = self.elf_header.e_shnum or null_section.sh_size
-
-        self.sections = [null_section]
-        for i in range(1, num_sections):
-            ind = offset + i * size
-            self.sections.append(Section(self.fmt, data[ind:ind + size], data, i))
-
-        symtab = None
-        for s in self.sections:
-            if s.sh_type == SHT_SYMTAB:
-                assert not symtab
-                symtab = s
-        assert symtab is not None
-        self.symtab = symtab
-
-        shstr = self.sections[self.elf_header.e_shstrndx]
-        for s in self.sections:
-            s.name = shstr.lookup_str(s.sh_name)
-            s.late_init(self.sections)
-
-    def find_section(self, name):
-        for s in self.sections:
-            if s.name == name:
-                return s
-        return None
-
-    def add_section(self, name, sh_type, sh_flags, sh_link, sh_info, sh_addralign, sh_entsize, data):
-        shstr = self.sections[self.elf_header.e_shstrndx]
-        sh_name = shstr.add_str(name)
-        s = Section.from_parts(self.fmt, sh_name=sh_name, sh_type=sh_type,
-                sh_flags=sh_flags, sh_link=sh_link, sh_info=sh_info,
-                sh_addralign=sh_addralign, sh_entsize=sh_entsize, data=data,
-                index=len(self.sections))
-        self.sections.append(s)
-        s.name = name
-        s.late_init(self.sections)
-        return s
-
-    def drop_mdebug_gptab(self):
-        # We can only drop sections at the end, since otherwise section
-        # references might be wrong. Luckily, these sections typically are.
-        while self.sections[-1].sh_type in [SHT_MIPS_DEBUG, SHT_MIPS_GPTAB]:
-            self.sections.pop()
-
-    def write(self, filename):
-        outfile = open(filename, 'wb')
-        outidx = 0
-        def write_out(data):
-            nonlocal outidx
-            outfile.write(data)
-            outidx += len(data)
-        def pad_out(align):
-            if align and outidx % align:
-                write_out(b'\0' * (align - outidx % align))
-
-        self.elf_header.e_shnum = len(self.sections)
-        write_out(self.elf_header.to_bin())
-
-        for s in self.sections:
-            if s.sh_type != SHT_NOBITS and s.sh_type != SHT_NULL:
-                pad_out(s.sh_addralign)
-                old_offset = s.sh_offset
-                s.sh_offset = outidx
-                if s.sh_type == SHT_MIPS_DEBUG and s.sh_offset != old_offset:
-                    # The .mdebug section has moved, relocate offsets
-                    s.relocate_mdebug(old_offset)
-                write_out(s.data)
-
-        pad_out(4)
-        self.elf_header.e_shoff = outidx
-        for s in self.sections:
-            write_out(s.header_to_bin())
-
-        outfile.seek(0)
-        outfile.write(self.elf_header.to_bin())
-        outfile.close()
 
 
 def is_temp_name(name):
