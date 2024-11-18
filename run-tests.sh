@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+export MIPS_CC=/Users/marijn/temp/asm-processor/ido-7.1-recomp-macos/cc
+
 for A in tests/*.c tests/*.p; do
     OBJDUMPFLAGS=-srt
     echo $A
