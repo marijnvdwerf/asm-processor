@@ -33,16 +33,20 @@ impl Relocation {
         })
     }
 
-    pub fn sym(&self) -> u32 {
+    pub fn sym_index(&self) -> u32 {
         self.r_info >> 8
     }
 
-    pub fn type_(&self) -> u8 {
+    pub fn rel_type(&self) -> u8 {
         (self.r_info & 0xff) as u8
     }
 
-    pub fn offset(&self) -> u32 {
-        self.r_offset
+    pub fn set_sym_index(&mut self, index: u32) {
+        self.r_info = (index << 8) | (self.r_info & 0xff);
+    }
+
+    pub fn set_rel_type(&mut self, type_: u8) {
+        self.r_info = (self.r_info & !0xff) | (type_ as u32);
     }
 
     pub fn to_bytes(&self, fmt: &ElfFormat) -> Vec<u8> {
@@ -71,8 +75,8 @@ mod tests {
         assert_eq!(reloc.r_offset, 0x12345678);
         assert_eq!(reloc.r_info, 0x9ABCDEF0);
         assert_eq!(reloc.r_addend, None);
-        assert_eq!(reloc.sym(), 0x9ABCDE);
-        assert_eq!(reloc.type_(), 0xF0);
+        assert_eq!(reloc.sym_index(), 0x9ABCDE);
+        assert_eq!(reloc.rel_type(), 0xF0);
     }
 
     #[test]

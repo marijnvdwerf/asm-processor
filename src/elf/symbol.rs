@@ -26,6 +26,10 @@ impl Symbol {
         let st_other = data[13];
         let st_shndx = fmt.unpack_u16(&data[14..16])?;
 
+        if st_shndx == SHN_XINDEX {
+            return Err(Error::InvalidFormat("SHN_XINDEX not supported".into()));
+        }
+
         Ok(Self {
             st_name,
             st_value,
