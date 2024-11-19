@@ -8,6 +8,7 @@ const SHF_LINK_ORDER: u32 = 0x80;
 
 pub trait Section {
     fn lookup_str(&self, index: usize) -> Result<String, Error>;
+    fn add_str(&mut self, s: &str) -> Result<u32, Error>;
 }
 
 #[derive(Debug, Clone)]
@@ -351,6 +352,18 @@ impl Section for ElfSection {
 
         String::from_utf8(self.data[index..index + end].to_vec())
             .map_err(|_| Error::InvalidSection("Invalid UTF-8 in string table".into()))
+    }
+
+    fn add_str(&mut self, s: &str) -> Result<u32, Error> {
+        if self.sh_type != SHT_STRTAB {
+            return Err(Error::InvalidSection("Not a string table section".into()));
+        }
+
+        let index = self.data.len();
+        self.data.extend_from_slice(s.as_bytes());
+        self.data.push(0);
+        self.sh_size = self.data.len() as u32;
+        Ok(index as u32)
     }
 }
 
