@@ -6,7 +6,7 @@ use std::{
     process::Command,
 };
 
-use asm_processor::{parse_source, utils::options::Opts, ProcessorOutput};
+use asm_processor::{run, parse_source, utils::options::Opts, ProcessorOutput, Args};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -91,8 +91,7 @@ fn parse_args() -> BuildConfig {
 fn run_preprocessor(
     config: &BuildConfig,
     temp_dir: &Path,
-) -> Result<(ProcessorOutput, PathBuf), Box<dyn std::error::Error>> {
-    // Create preprocessed filename with UUID
+) -> Result<(Option<ProcessorOutput>, PathBuf), Box<dyn std::error::Error>> {
     let preprocessed_filename = format!(
         "preprocessed_{}.{}",
         Uuid::new_v4(),
@@ -100,23 +99,30 @@ fn run_preprocessor(
     );
     let preprocessed_path = temp_dir.join(&preprocessed_filename);
 
-    // Run first pass of asm_processor
-    let preprocessed_file = File::create(&preprocessed_path)?;
-    let mut writer = BufWriter::new(preprocessed_file);
+    // Create Args struct for first asm_processor run
+    let args = Args {
+        filename: config.in_file.clone(),
+        post_process: None,
+        assembler: None,
+        asm_prelude: None,
+        input_enc: "latin1".to_string(),
+        output_enc: "latin1".to_string(),
+        drop_mdebug_gptab: false,
+        convert_statics: "local".to_string(),
+        force: false,
+        encode_cutscene_data_floats: false,
+        framepointer: config.asmproc_flags.contains(&"-framepointer".to_string()),
+        mips1: config.asmproc_flags.contains(&"-mips1".to_string()),
+        g3: config.asmproc_flags.contains(&"-g3".to_string()),
+        kpic: config.asmproc_flags.contains(&"-KPIC".to_string()),
+        opt_o0: config.asmproc_flags.contains(&"-O0".to_string()),
+        opt_o1: config.asmproc_flags.contains(&"-O1".to_string()),
+        opt_o2: config.asmproc_flags.contains(&"-O2".to_string()),
+        opt_g: config.asmproc_flags.contains(&"-g".to_string()),
+    };
 
-    let mut deps = Vec::new();
-    let input_file = File::open(&config.in_file)?;
-    let functions = parse_source(&mut std::io::BufReader::new(input_file), &Opts::new(
-        "O2", // This will be overridden by the flags
-        false,
-        false,
-        false,
-        false,
-        false,
-        &config.in_file,
-        "latin1",
-        "latin1",
-    ), &mut deps, Some(&mut writer))?;
+    // Run first pass of asm_processor
+    let output = run(&args)?;
 
     if config.keep_preprocessed {
         let keep_dir = PathBuf::from("./asm_processor_preprocessed");
@@ -129,7 +135,7 @@ fn run_preprocessor(
         fs::copy(&preprocessed_path, keep_dir.join(keep_name))?;
     }
 
-    Ok((ProcessorOutput { functions, dependencies: deps }, preprocessed_path))
+    Ok((output, preprocessed_path))
 }
 
 fn run_compiler(
@@ -189,10 +195,38 @@ fn write_deps_file(
     Ok(())
 }
 
+fn run_post_processor(
+    config: &BuildConfig,
+    output: &ProcessorOutput,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Create Args struct for post-processing
+    let args = Args {
+        filename: config.in_file.clone(),
+        post_process: Some(config.out_file.clone()),
+        assembler: Some(config.assembler_args.join(" ")),
+        asm_prelude: Some(config.asm_prelude_path.clone()),
+        input_enc: "latin1".to_string(),
+        output_enc: "latin1".to_string(),
+        drop_mdebug_gptab: false,
+        convert_statics: "local".to_string(),
+        force: false,
+        encode_cutscene_data_floats: false,
+        framepointer: config.asmproc_flags.contains(&"-framepointer".to_string()),
+        mips1: config.asmproc_flags.contains(&"-mips1".to_string()),
+        g3: config.asmproc_flags.contains(&"-g3".to_string()),
+        kpic: config.asmproc_flags.contains(&"-KPIC".to_string()),
+        opt_o0: config.asmproc_flags.contains(&"-O0".to_string()),
+        opt_o1: config.asmproc_flags.contains(&"-O1".to_string()),
+        opt_o2: config.asmproc_flags.contains(&"-O2".to_string()),
+        opt_g: config.asmproc_flags.contains(&"-g".to_string()),
+    };
+
+    run(&args)?;
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = parse_args();
-    
-    // Create temporary directory
     let temp_dir = TempDir::new()?;
     
     // Run preprocessor
@@ -201,30 +235,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run compiler
     run_compiler(&config, &preprocessed_path)?;
     
-    // Run post-processor
-    let assembler_sh = config.assembler_args.join(" ");
-    let mut post_process_args = config.asmproc_flags.clone();
-    post_process_args.extend_from_slice(&[
-        "--post-process".to_string(),
-        config.out_file.to_string_lossy().into_owned(),
-        "--assembler".to_string(),
-        assembler_sh,
-        "--asm-prelude".to_string(),
-        config.asm_prelude_path.to_string_lossy().into_owned(),
-    ]);
-
-    asm_processor::fixup_objfile(
-        &config.out_file,
-        &output.functions,
-        &fs::read(&config.asm_prelude_path)?,
-        &config.assembler_args.join(" "),
-        "latin1",
-        false,
-        "local",
-    )?;
-
-    // Write dependencies file
-    write_deps_file(&config, &output.dependencies)?;
+    // Run post-processor if we have functions to process
+    if let Some(output) = output {
+        run_post_processor(&config, &output)?;
+        write_deps_file(&config, &output.dependencies)?;
+    }
 
     Ok(())
 }
