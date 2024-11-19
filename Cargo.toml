@@ -1,0 +1,20 @@
+[package]
+name = "asm-processor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+regex = "1.0"
+encoding_rs = "0.8"
+lazy_static = "1.4"
+thiserror = "1.0"
+byteorder = "1.4"
+
+[[bin]]
+name = "asm-build"
+path = "src/bin/build.rs"
+
+[lib]
+name = "asm_processor"
+path = "src/lib.rs"
