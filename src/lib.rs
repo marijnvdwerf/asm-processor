@@ -9,3 +9,11 @@ pub use utils::{Error, Result};
 pub use utils::state::GlobalState;
 pub use processor::parse_source;
 pub use objfile::fixup_objfile;
+
+use asm::Function;
+
+#[derive(Debug)]
+pub struct ProcessorOutput {
+    pub functions: Vec<Function>,
+    pub dependencies: Vec<String>,
+}

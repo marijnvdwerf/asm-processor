@@ -13,6 +13,9 @@ byteorder = "1.4"
 tempfile = "3.8"
 uuid = { version = "1.4", features = ["v4"] }
 
+[[bin]]
+name = "asm-build"
+path = "src/bin/asm_build.rs"
 
 [lib]
 name = "asm_processor"
