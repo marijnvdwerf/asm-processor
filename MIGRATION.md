@@ -237,6 +237,52 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 ```
 
+### Processor Module
+
+The `processor` module is responsible for parsing source files and processing assembly blocks. It serves as the main entry point for the ASM processor functionality.
+
+### Key Components
+
+#### parse_source Function
+- **Purpose**: Processes source files containing assembly blocks and directives
+- **Input**: Source file reader, options, and optional output writer
+- **Output**: Vector of processed assembly functions
+- **Features**:
+  - Generic over input/output types (BufRead/Write traits)
+  - Comprehensive error handling
+  - Support for all optimization levels
+  - KPIC and framepointer handling
+  - Cutscene data float encoding
+  - Recursive file inclusion
+  - Line number tracking
+  - Dependency management
+
+### Module Organization
+```rust
+src/processor.rs
+├── repl_float_hex() - Float to hex conversion
+└── parse_source<R, W>() - Main processing function
+    ├── Optimization level handling
+    ├── KPIC adjustments
+    ├── Assembly block processing
+    ├── File inclusion
+    └── Source line management
+```
+
+### Dependencies
+- `regex` - Pattern matching
+- `lazy_static` - Efficient regex compilation
+- Standard library components:
+  - `std::fs::File`
+  - `std::io::{BufRead, Write}`
+  - `std::path::Path`
+
+### Integration Points
+- Works with `GlobalState` for tracking processor state
+- Uses `GlobalAsmBlock` for assembly block handling
+- Integrates with `Function` for assembly function representation
+- Utilizes custom error types from `utils::error`
+
 ### Python-isms and Compatibility
 
 1. **String Handling**
