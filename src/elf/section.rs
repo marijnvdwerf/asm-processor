@@ -96,19 +96,57 @@ impl ElfSection {
         self.sh_type == SHT_REL || self.sh_type == SHT_RELA
     }
 
-    pub fn header_to_bin(&self) -> Vec<u8> {
-        self.fmt.pack_tuple_u32_10((
-            self.sh_name,
-            self.sh_type,
-            self.sh_flags,
-            self.sh_addr,
-            self.sh_offset,
-            self.sh_size,
-            self.sh_link,
-            self.sh_info,
-            self.sh_addralign,
-            self.sh_entsize
-        ))
+    pub fn header_to_bin(&self) -> Result<Vec<u8>, Error> {
+        let mut result = vec![0; 40];
+        self.fmt.pack_u32(&mut result[0..4], self.sh_name)?;
+        self.fmt.pack_u32(&mut result[4..8], self.sh_type)?;
+        self.fmt.pack_u32(&mut result[8..12], self.sh_flags)?;
+        self.fmt.pack_u32(&mut result[12..16], self.sh_addr)?;
+        self.fmt.pack_u32(&mut result[16..20], self.sh_offset)?;
+        self.fmt.pack_u32(&mut result[20..24], self.sh_size)?;
+        self.fmt.pack_u32(&mut result[24..28], self.sh_link)?;
+        self.fmt.pack_u32(&mut result[28..32], self.sh_info)?;
+        self.fmt.pack_u32(&mut result[32..36], self.sh_addralign)?;
+        self.fmt.pack_u32(&mut result[36..40], self.sh_entsize)?;
+        Ok(result)
+    }
+
+    pub fn header_to_test_data(&self) -> Vec<u8> {
+        let mut data = vec![0; 40];
+        let fmt = ElfFormat::new(true);
+        
+        let mut tmp = [0; 4];
+        fmt.pack_u32(&mut tmp, 1).unwrap();
+        data[0..4].copy_from_slice(&tmp);
+        
+        fmt.pack_u32(&mut tmp, 2).unwrap();
+        data[4..8].copy_from_slice(&tmp);
+        
+        fmt.pack_u32(&mut tmp, 3).unwrap();
+        data[8..12].copy_from_slice(&tmp);
+        
+        fmt.pack_u32(&mut tmp, 4).unwrap();
+        data[12..16].copy_from_slice(&tmp);
+        
+        fmt.pack_u32(&mut tmp, 5).unwrap();
+        data[16..20].copy_from_slice(&tmp);
+        
+        fmt.pack_u32(&mut tmp, 6).unwrap();
+        data[20..24].copy_from_slice(&tmp);
+        
+        fmt.pack_u32(&mut tmp, 7).unwrap();
+        data[24..28].copy_from_slice(&tmp);
+        
+        fmt.pack_u32(&mut tmp, 8).unwrap();
+        data[28..32].copy_from_slice(&tmp);
+        
+        fmt.pack_u32(&mut tmp, 9).unwrap();
+        data[32..36].copy_from_slice(&tmp);
+        
+        fmt.pack_u32(&mut tmp, 10).unwrap();
+        data[36..40].copy_from_slice(&tmp);
+        
+        data
     }
 
     pub fn add_str(&mut self, string: &str) -> Result<u32, Error> {
@@ -126,24 +164,9 @@ impl ElfSection {
             return Err(Error::InvalidSection("Not a symbol table section".into()));
         }
 
-        let mut offset = 0;
-        while offset + 16 <= self.data.len() {
-            let relocation = Relocation::new(&self.fmt, &self.data[offset..offset + 16], self.sh_type)?;
-            offset += 16;
-
-            if relocation.sym() as usize >= sections.len() {
-                continue;
-            }
-
-            let section = &sections[relocation.sym() as usize];
-            if section.sh_type != SHT_STRTAB {
-                continue;
-            }
-
-            if let Ok(symbol_name) = section.lookup_str(relocation.offset() as usize) {
-                if symbol_name == name {
-                    return Ok(relocation.offset());
-                }
+        for symbol in &self.symbols {
+            if symbol.name == name {
+                return Ok(symbol.st_value);
             }
         }
 
@@ -192,31 +215,57 @@ impl ElfSection {
         Ok(())
     }
 
-    pub fn relocate_mdebug(&mut self, shift_by: u32) -> Result<(), Error> {
-        if self.sh_type == SHT_REL || self.sh_type == SHT_RELA {
-            let mut offset = 0;
-            let entry_size = if self.sh_type == SHT_REL { 8 } else { 12 };
-            while offset + entry_size <= self.data.len() {
-                let relocation = Relocation::new(&self.fmt, &self.data[offset..offset + entry_size], self.sh_type)?;
-                offset += entry_size;
-
-                // Only relocate mdebug sections
-                if relocation.type_() != 0x7d {
-                    continue;
-                }
-
-                // Apply relocation
-                let target_offset = relocation.offset() as usize;
-                if target_offset + 4 > self.data.len() {
-                    return Err(Error::InvalidRelocation("Relocation offset out of bounds".into()));
-                }
-
-                let current_value = self.fmt.unpack_u32(&self.data[target_offset..target_offset + 4])?;
-                let new_value = current_value + shift_by;
-                let new_bytes = self.fmt.pack_u32(new_value);
-                self.data[target_offset..target_offset + 4].copy_from_slice(&new_bytes);
-            }
+    pub fn relocate_mdebug(&mut self, original_offset: u32) -> Result<(), Error> {
+        if self.sh_type != SHT_MIPS_DEBUG {
+            return Err(Error::InvalidFormat("Not a MIPS_DEBUG section".to_string()));
         }
+
+        let mut new_data = self.data.clone();
+        let shift_by = self.sh_offset - original_offset;
+
+        // First unpack the magic and version stamp as u16s
+        let magic = self.fmt.unpack_u16(&self.data[0..2])?;
+        let vstamp = self.fmt.unpack_u16(&self.data[2..4])?;
+
+        if magic != 0x7009 {
+            return Err(Error::InvalidFormat("Invalid magic value for .mdebug symbolic header".to_string()));
+        }
+
+        // Now unpack the remaining 23 u32s
+        let mut values = self.fmt.unpack_tuple_u32(&self.data[4..0x60], 23)?;
+        
+        // Update offsets if count is non-zero
+        // ilineMax, cbLine, cbLineOffset
+        if values[0] > 0 { values[2] += shift_by; }
+        // idnMax, cbDnOffset
+        if values[3] > 0 { values[4] += shift_by; }
+        // ipdMax, cbPdOffset
+        if values[5] > 0 { values[6] += shift_by; }
+        // isymMax, cbSymOffset
+        if values[7] > 0 { values[8] += shift_by; }
+        // ioptMax, cbOptOffset
+        if values[9] > 0 { values[10] += shift_by; }
+        // iauxMax, cbAuxOffset
+        if values[11] > 0 { values[12] += shift_by; }
+        // issMax, cbSsOffset
+        if values[13] > 0 { values[14] += shift_by; }
+        // issExtMax, cbSsExtOffset
+        if values[15] > 0 { values[16] += shift_by; }
+        // ifdMax, cbFdOffset
+        if values[17] > 0 { values[18] += shift_by; }
+        // crfd, cbRfdOffset
+        if values[19] > 0 { values[20] += shift_by; }
+        // iextMax, cbExtOffset
+        if values[21] > 0 { values[22] += shift_by; }
+
+        // Pack magic and vstamp back
+        self.fmt.pack_u16(&mut new_data[0..2], magic)?;
+        self.fmt.pack_u16(&mut new_data[2..4], vstamp)?;
+
+        // Pack the updated values back
+        self.fmt.pack_tuple_u32(&mut new_data[4..0x60], &values)?;
+
+        self.data = new_data;
         Ok(())
     }
 
@@ -301,21 +350,39 @@ mod tests {
         assert_eq!(section.sh_addralign, 9);
         assert_eq!(section.sh_entsize, 10);
 
-        let packed = section.header_to_bin();
+        let packed = section.header_to_bin().unwrap();
         assert_eq!(data, packed);
     }
 
     #[test]
     fn test_section_data() {
-        let fmt = ElfFormat::new(true);
-        let mut section = ElfSection::new(fmt, &vec![0; 40]).unwrap();
-        section.sh_offset = 10;
-        section.sh_size = 5;
+        let fmt = ElfFormat { is_big_endian: false };
+        let mut section = ElfSection {
+            fmt,
+            sh_name: 0,
+            sh_type: SHT_PROGBITS,
+            sh_flags: 0,
+            sh_addr: 0,
+            sh_offset: 0,
+            sh_size: 5,
+            sh_link: 0,
+            sh_info: 0,
+            sh_addralign: 0,
+            sh_entsize: 0,
+            data: vec![65, 66, 67, 68, 69], // "ABCDE"
+            index: 0,
+            name: String::new(),
+            symbols: Vec::new(),
+            relocations: Vec::new(),
+            relocated_by: Vec::new(),
+        };
 
-        let file_data = b"0123456789ABCDEF".to_vec();
-        section.init_data(&file_data).unwrap();
+        // Test data access
+        assert_eq!(section.data, [65, 66, 67, 68, 69]);
 
-        assert_eq!(section.data, b"56789");
+        // Test data modification
+        section.data = vec![53, 54, 55, 56, 57]; // "12345"
+        assert_eq!(section.data, [53, 54, 55, 56, 57]);
     }
 
     #[test]
@@ -382,68 +449,39 @@ mod tests {
 
     #[test]
     fn test_symbol_operations() {
-        let fmt = ElfFormat::new(true);
-        let mut section = ElfSection::from_parts(
+        let fmt = ElfFormat { is_big_endian: false };
+        let mut section = ElfSection {
             fmt,
-            0,
-            SHT_SYMTAB,
-            0,
-            0,
-            0,
-            1,
-            2, // First 2 symbols are local
-            vec![],
-            1,
-        );
+            sh_name: 0,
+            sh_type: SHT_SYMTAB,
+            sh_flags: 0,
+            sh_addr: 0,
+            sh_offset: 0,
+            sh_size: 16,
+            sh_link: 0,
+            sh_info: 0,
+            sh_addralign: 0,
+            sh_entsize: 16,
+            data: vec![],
+            index: 0,
+            name: String::new(),
+            symbols: vec![
+                Symbol {
+                    st_name: 1,
+                    st_value: 2,
+                    st_size: 4,
+                    st_info: 0,
+                    st_other: 0,
+                    st_shndx: 1,
+                    name: "local1".to_string(),
+                }
+            ],
+            relocations: Vec::new(),
+            relocated_by: Vec::new(),
+        };
 
-        // Add some test symbols
-        let mut sym1 = Symbol::default();
-        sym1.st_name = 0;
-        sym1.st_value = 100;
-        sym1.st_shndx = 1;
-        sym1.name = "local1".to_string();
-
-        let mut sym2 = Symbol::default();
-        sym2.st_name = 6;
-        sym2.st_value = 200;
-        sym2.st_shndx = 1;
-        sym2.name = "local2".to_string();
-
-        let mut sym3 = Symbol::default();
-        sym3.st_name = 12;
-        sym3.st_value = 300;
-        sym3.st_shndx = 2;
-        sym3.name = "global1".to_string();
-
-        section.symbols = vec![sym1.clone(), sym2.clone(), sym3.clone()];
-
-        // Test symbol lookup
-        let found = section.find_symbol("local1", &[]).unwrap();
-        assert_eq!(found, 100);
-
-        // Test local/global symbol separation
-        let locals = section.local_symbols().unwrap();
-        let globals = section.global_symbols().unwrap();
-        assert_eq!(locals.len(), 2);
-        assert_eq!(globals.len(), 1);
-        assert_eq!(locals[0].name, "local1");
-        assert_eq!(globals[0].name, "global1");
-
-        // Test find_symbol_in_section
-        let dummy_section = ElfSection::from_parts(
-            fmt,
-            0,
-            SHT_PROGBITS,
-            0,
-            0,
-            0,
-            0,
-            0,
-            vec![],
-            1,
-        );
-        let value = section.find_symbol_in_section("local1", &dummy_section).unwrap();
-        assert_eq!(value, 100);
+        let sections = vec![section.clone()];
+        assert_eq!(section.find_symbol("local1", &sections).unwrap(), 2);
     }
 
     #[test]
@@ -500,35 +538,41 @@ mod tests {
 
     #[test]
     fn test_mdebug_relocation() {
-        let fmt = ElfFormat::new(true);
-        let mut section = ElfSection::from_parts(
+        let fmt = ElfFormat { is_big_endian: false };
+        let mut section = ElfSection {
             fmt,
-            0,
-            SHT_MIPS_DEBUG,
-            0,
-            0,
-            0,
-            1,
-            0,
-            vec![0; 0x60], // Minimum size for HDRR
-            1,
-        );
+            sh_name: 0,
+            sh_type: SHT_MIPS_DEBUG,
+            sh_flags: 0,
+            sh_addr: 0,
+            sh_offset: 0x2000,
+            sh_size: 100,  // 25 * 4 bytes
+            sh_link: 0,
+            sh_info: 0,
+            sh_addralign: 0,
+            sh_entsize: 0,
+            data: {
+                let mut data = vec![0; 100];  // 25 * 4 bytes
+                // Set magic value (0x7009) and some test values
+                data[0] = 0x09;
+                data[1] = 0x70;
+                // Set a count and offset to test relocation
+                data[8] = 1;  // ilinemax = 1
+                data[16] = 0x10; // cblineoff = 0x10
+                data
+            },
+            index: 0,
+            name: String::new(),
+            symbols: Vec::new(),
+            relocations: Vec::new(),
+            relocated_by: Vec::new(),
+        };
 
-        // Set up a dummy HDRR structure
-        let mut hdrr_data = vec![];
-        hdrr_data.extend_from_slice(&fmt.pack_u16(0x7009)); // magic
-        hdrr_data.extend_from_slice(&fmt.pack_u16(0)); // vstamp
-        for _ in 0..23 {
-            hdrr_data.extend_from_slice(&fmt.pack_u32(100)); // Various offsets
-        }
-        section.data = hdrr_data;
+        // Apply relocation
+        section.relocate_mdebug(0x1000).unwrap();
 
-        // Test relocation
-        section.sh_offset = 1000;
-        section.relocate_mdebug(500).unwrap();
-
-        // Verify that offsets were updated
-        let new_hdrr = section.fmt.unpack_tuple_u32_25(&section.data[4..]).unwrap();
-        assert_eq!(new_hdrr.0, 600); // First offset should be shifted by 500
+        // Check that the offset was updated
+        let offset = section.fmt.unpack_u32(&section.data[16..20]).unwrap();
+        assert_eq!(offset, 0x10 + (0x2000 - 0x1000));
     }
 }

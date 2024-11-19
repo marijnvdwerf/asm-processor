@@ -53,15 +53,15 @@ impl Symbol {
         self.st_info = (self.st_info & 0xf0) | (type_ & 0xf);
     }
 
-    pub fn to_bytes(&self, fmt: &ElfFormat) -> Vec<u8> {
-        let mut result = Vec::with_capacity(16);
-        result.extend_from_slice(&fmt.pack_u32(self.st_name));
-        result.extend_from_slice(&fmt.pack_u32(self.st_value));
-        result.extend_from_slice(&fmt.pack_u32(self.st_size));
-        result.push(self.st_info);
-        result.push(self.st_other);
-        result.extend_from_slice(&fmt.pack_u16(self.st_shndx));
-        result
+    pub fn to_bytes(&self, fmt: &ElfFormat) -> Result<Vec<u8>, Error> {
+        let mut result = vec![0; 16];
+        fmt.pack_u32(&mut result[0..4], self.st_name)?;
+        fmt.pack_u32(&mut result[4..8], self.st_value)?;
+        fmt.pack_u32(&mut result[8..12], self.st_size)?;
+        result[12] = self.st_info;
+        result[13] = self.st_other;
+        fmt.pack_u16(&mut result[14..16], self.st_shndx)?;
+        Ok(result)
     }
 }
 
@@ -103,14 +103,13 @@ mod tests {
             name: String::new(),
         };
 
-        let packed = original.to_bytes(&fmt);
-        let unpacked = Symbol::new(&fmt, &packed).unwrap();
-
-        assert_eq!(unpacked.st_name, original.st_name);
-        assert_eq!(unpacked.st_value, original.st_value);
-        assert_eq!(unpacked.st_size, original.st_size);
-        assert_eq!(unpacked.st_info, original.st_info);
-        assert_eq!(unpacked.st_other, original.st_other);
-        assert_eq!(unpacked.st_shndx, original.st_shndx);
+        let bytes = original.to_bytes(&fmt).unwrap();
+        let symbol = Symbol::new(&fmt, &bytes).unwrap();
+        assert_eq!(symbol.st_name, original.st_name);
+        assert_eq!(symbol.st_value, original.st_value);
+        assert_eq!(symbol.st_size, original.st_size);
+        assert_eq!(symbol.st_info, original.st_info);
+        assert_eq!(symbol.st_other, original.st_other);
+        assert_eq!(symbol.st_shndx, original.st_shndx);
     }
 }

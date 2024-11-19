@@ -46,14 +46,11 @@ impl Relocation {
     }
 
     pub fn to_bytes(&self, fmt: &ElfFormat) -> Vec<u8> {
-        let mut result = fmt.pack_tuple_u32_10((
-            self.r_offset,
-            self.r_info,
-            self.r_addend.unwrap_or(0),
-            0, 0, 0, 0, 0, 0, 0
-        ));
-        if self.r_addend.is_none() {
-            result.truncate(8);
+        let mut result = vec![0; if self.r_addend.is_some() { 12 } else { 8 }];
+        fmt.pack_u32(&mut result[0..4], self.r_offset).unwrap();
+        fmt.pack_u32(&mut result[4..8], self.r_info).unwrap();
+        if let Some(addend) = self.r_addend {
+            fmt.pack_u32(&mut result[8..12], addend).unwrap();
         }
         result
     }
@@ -66,9 +63,9 @@ mod tests {
     #[test]
     fn test_relocation_parse() {
         let fmt = ElfFormat::new(true);
-        let mut data = Vec::new();
-        data.extend_from_slice(&fmt.pack_u32(0x12345678)); // r_offset
-        data.extend_from_slice(&fmt.pack_u32(0x9ABCDEF0)); // r_info
+        let mut data = vec![0; 8];
+        fmt.pack_u32(&mut data[0..4], 0x12345678).unwrap(); // r_offset
+        fmt.pack_u32(&mut data[4..8], 0x9ABCDEF0).unwrap(); // r_info
 
         let reloc = Relocation::new(&fmt, &data, 2).unwrap();
         assert_eq!(reloc.r_offset, 0x12345678);
@@ -81,10 +78,10 @@ mod tests {
     #[test]
     fn test_relocation_with_addend() {
         let fmt = ElfFormat::new(true);
-        let mut data = Vec::new();
-        data.extend_from_slice(&fmt.pack_u32(0x12345678)); // r_offset
-        data.extend_from_slice(&fmt.pack_u32(0x9ABCDEF0)); // r_info
-        data.extend_from_slice(&fmt.pack_u32(0x11223344)); // r_addend
+        let mut data = vec![0; 12];
+        fmt.pack_u32(&mut data[0..4], 0x12345678).unwrap(); // r_offset
+        fmt.pack_u32(&mut data[4..8], 0x9ABCDEF0).unwrap(); // r_info
+        fmt.pack_u32(&mut data[8..12], 0x11223344).unwrap(); // r_addend
 
         let reloc = Relocation::new(&fmt, &data, SHT_RELA).unwrap();
         assert_eq!(reloc.r_offset, 0x12345678);
@@ -101,11 +98,10 @@ mod tests {
             r_addend: Some(0x11223344),
         };
 
-        let packed = reloc.to_bytes(&fmt);
-        let unpacked = Relocation::new(&fmt, &packed, SHT_RELA).unwrap();
-
-        assert_eq!(unpacked.r_offset, reloc.r_offset);
-        assert_eq!(unpacked.r_info, reloc.r_info);
-        assert_eq!(unpacked.r_addend, reloc.r_addend);
+        let bytes = reloc.to_bytes(&fmt);
+        let reloc2 = Relocation::new(&fmt, &bytes, SHT_RELA).unwrap();
+        assert_eq!(reloc.r_offset, reloc2.r_offset);
+        assert_eq!(reloc.r_info, reloc2.r_info);
+        assert_eq!(reloc.r_addend, reloc2.r_addend);
     }
 }

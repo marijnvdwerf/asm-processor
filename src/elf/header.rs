@@ -22,7 +22,7 @@ pub struct ElfHeader {
 
 impl ElfHeader {
     pub fn new(fmt: &ElfFormat, data: &[u8]) -> Result<Self, Error> {
-        if data.len() < EI_NIDENT {
+        if data.len() < 52 {
             return Err(Error::InvalidFormat("Header too short".into()));
         }
 
@@ -84,6 +84,25 @@ impl ElfHeader {
             e_shstrndx,
         })
     }
+
+    pub fn to_bytes(&self, fmt: &ElfFormat) -> Result<Vec<u8>, Error> {
+        let mut result = vec![0; 52];
+        result[0..EI_NIDENT].copy_from_slice(&self.e_ident);
+        fmt.pack_u16(&mut result[16..18], self.e_type)?;
+        fmt.pack_u16(&mut result[18..20], self.e_machine)?;
+        fmt.pack_u32(&mut result[20..24], self.e_version)?;
+        fmt.pack_u32(&mut result[24..28], self.e_entry)?;
+        fmt.pack_u32(&mut result[28..32], self.e_phoff)?;
+        fmt.pack_u32(&mut result[32..36], self.e_shoff)?;
+        fmt.pack_u32(&mut result[36..40], self.e_flags)?;
+        fmt.pack_u16(&mut result[40..42], self.e_ehsize)?;
+        fmt.pack_u16(&mut result[42..44], self.e_phentsize)?;
+        fmt.pack_u16(&mut result[44..46], self.e_phnum)?;
+        fmt.pack_u16(&mut result[46..48], self.e_shentsize)?;
+        fmt.pack_u16(&mut result[48..50], self.e_shnum)?;
+        fmt.pack_u16(&mut result[50..52], self.e_shstrndx)?;
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
@@ -102,33 +121,32 @@ mod tests {
         data[3] = b'F';
 
         // Set type to ET_REL (1)
-        data[16] = 0;
-        data[17] = 1;
+        fmt.pack_u16(&mut data[16..18], 1).unwrap();
 
         // Set machine to MIPS (8)
-        data[18] = 0;
-        data[19] = 8;
+        fmt.pack_u16(&mut data[18..20], 8).unwrap();
 
         // Set version
-        data[20] = 0;
-        data[21] = 0;
-        data[22] = 0;
-        data[23] = 1;
+        fmt.pack_u32(&mut data[20..24], 1).unwrap();
 
         // Set shoff to non-zero
-        data[32] = 0;
-        data[33] = 0;
-        data[34] = 0;
-        data[35] = 1;
+        fmt.pack_u32(&mut data[32..36], 1).unwrap();
 
         // Set shstrndx to non-zero
-        data[50] = 0;
-        data[51] = 1;
+        fmt.pack_u16(&mut data[50..52], 1).unwrap();
 
         let header = ElfHeader::new(&fmt, &data).unwrap();
         assert_eq!(header.e_type, 1);
         assert_eq!(header.e_machine, 8);
         assert_eq!(header.e_shoff, 1);
         assert_eq!(header.e_shstrndx, 1);
+
+        // Test round-trip
+        let bytes = header.to_bytes(&fmt).unwrap();
+        let header2 = ElfHeader::new(&fmt, &bytes).unwrap();
+        assert_eq!(header.e_type, header2.e_type);
+        assert_eq!(header.e_machine, header2.e_machine);
+        assert_eq!(header.e_shoff, header2.e_shoff);
+        assert_eq!(header.e_shstrndx, header2.e_shstrndx);
     }
 }
