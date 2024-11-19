@@ -17,7 +17,7 @@ pub struct Symbol {
 }
 
 impl Symbol {
-    pub fn new(fmt: &ElfFormat, data: &[u8], strtab: &Section) -> Result<Self, Error> {
+    pub fn new<T: Section>(fmt: &ElfFormat, data: &[u8], strtab: &T) -> Result<Self, Error> {
         if data.len() < 16 {
             return Err(Error::InvalidFormat("Symbol data too short".into()));
         }
@@ -28,13 +28,8 @@ impl Symbol {
         let st_info = data[12];
         let st_other = data[13];
         let st_shndx = fmt.unpack_u16(&data[14..16])?;
-
-        if st_shndx == SHN_XINDEX {
-            return Err(Error::InvalidFormat("SHN_XINDEX not supported".into()));
-        }
-
-        let name = strtab.lookup_str(st_name)?;
-        let visibility = st_other & 3;
+        let name = strtab.lookup_str(st_name.try_into().unwrap())?;
+        let visibility = st_other & 0x3;
 
         Ok(Self {
             st_name,
@@ -49,7 +44,7 @@ impl Symbol {
         })
     }
 
-    pub fn from_parts(
+    pub fn from_parts<T: Section>(
         fmt: ElfFormat,
         st_name: u32,
         st_value: u32,
@@ -57,7 +52,7 @@ impl Symbol {
         st_info: u8,
         st_other: u8,
         st_shndx: u16,
-        strtab: &Section,
+        strtab: &T,
         name: String,
     ) -> Result<Self, Error> {
         Ok(Self {

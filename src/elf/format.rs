@@ -7,6 +7,14 @@ pub struct ElfFormat {
     pub is_big_endian: bool,
 }
 
+impl Default for ElfFormat {
+    fn default() -> Self {
+        Self {
+            is_big_endian: false
+        }
+    }
+}
+
 impl ElfFormat {
     pub fn new(is_big_endian: bool) -> Self {
         Self { is_big_endian }

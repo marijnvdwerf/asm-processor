@@ -283,10 +283,14 @@ impl ElfSection {
     }
 
     pub fn init_symbols(&mut self) -> Result<(), Error> {
+        if self.sh_type != SHT_SYMTAB {
+            return Ok(());
+        }
+
         let mut symbols = Vec::new();
         let mut offset = 0;
-        while offset < self.data.len() {
-            let symbol = Symbol::new(&self.fmt, &self.data[offset..offset + 16])?;
+        while offset + 16 <= self.data.len() {
+            let symbol = Symbol::new(&self.fmt, &self.data[offset..offset + 16], self)?;
             symbols.push(symbol);
             offset += 16;
         }

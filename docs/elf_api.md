@@ -95,7 +95,7 @@ impl ElfSection {
 
     // Find symbol by name within this section
     // Python: find_symbol_in_section(name, section) 
-    pub fn find_symbol_in_section(&self, name: &str, section: &ElfSection) -> u32;
+    pub fn find_symbol_in_section(&self, name: &str, section: &ElfSection) -> Result<u32, Error> {
 
     // Get symbol entries
     // Python: symbol_entries property

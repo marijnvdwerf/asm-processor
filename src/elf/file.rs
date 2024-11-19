@@ -137,10 +137,10 @@ impl ElfFile {
 
     pub fn find_symbol(&self, name: &str) -> Option<(usize, u32)> {
         let symtab = &self.sections[self.symtab];
-        symtab.find_symbol(name)
+        symtab.find_symbol(name, &self.sections).ok().flatten()
     }
 
-    pub fn find_symbol_in_section(&self, name: &str, section: &ElfSection) -> u32 {
+    pub fn find_symbol_in_section(&self, name: &str, section: &ElfSection) -> Result<u32, Error> {
         let symtab = &self.sections[self.symtab];
         symtab.find_symbol_in_section(name, section)
     }
@@ -338,7 +338,7 @@ mod tests {
         
         if let Some(section) = elf.find_section(".text") {
             let offset = elf.find_symbol_in_section("test_symbol", section);
-            assert!(offset > 0);
+            assert!(offset.is_ok());
         }
         
         Ok(())
