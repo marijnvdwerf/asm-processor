@@ -1,3 +1,14 @@
+//! Object file processing module
+//! 
+//! This module handles the processing of object files, specifically for merging
+//! assembly code with C object files. It provides functionality for:
+//! - Processing ELF sections
+//! - Managing symbols and relocations
+//! - Handling late rodata and jump tables
+//! 
+//! The main entry point is the `fixup_objfile` function, which orchestrates
+//! the entire object file processing workflow.
+
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -7,24 +18,63 @@ use tempfile::NamedTempFile;
 use crate::elf::{
     file::ElfFile,
     symbol::Symbol,
+    section::Section,
+    relocation::Relocation,
     constants::{
         SHN_UNDEF, SHT_RELA, SHN_ABS, STT_FUNC, STB_LOCAL, STT_OBJECT,
-        STV_DEFAULT, STB_GLOBAL, SHT_REL,
+        STV_DEFAULT, STB_GLOBAL, SHT_REL, SHF_ALLOC,
     },
 };
-use crate::error::Error;
 
 const SECTIONS: &[&str] = &[".data", ".text", ".rodata", ".bss"];
 
+/// Error type for object file processing operations
+#[derive(Debug, thiserror::Error)]
+pub enum ObjFileError {
+    /// IO errors during file operations
+    #[error("IO error: {0}")]
+    Io(#[from] io::Error),
+    
+    /// Errors during ELF file processing
+    #[error("ELF processing error: {0}")]
+    ElfError(String),
+    
+    /// Errors related to section processing
+    #[error("Section error: {0}")]
+    SectionError(String),
+    
+    /// Errors related to symbol processing
+    #[error("Symbol error: {0}")]
+    SymbolError(String),
+    
+    /// Errors related to relocation processing
+    #[error("Relocation error: {0}")]
+    RelocationError(String),
+    
+    /// General processing errors
+    #[error("Processing error: {0}")]
+    ProcessingError(String),
+}
+
+/// Result type for object file operations
+pub type Result<T> = std::result::Result<T, ObjFileError>;
+
 /// Represents a function's assembly data
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AsmFunction {
+    /// Map of section type to (temp name, size)
     pub data: HashMap<String, (Option<String>, usize)>,
+    /// Assembly contents
     pub asm_contents: Vec<String>,
+    /// Labels in text section
     pub text_glabels: Vec<String>,
+    /// Late rodata assembly contents
     pub late_rodata_asm_contents: Vec<String>,
+    /// Late rodata placeholders
     pub late_rodata_dummy_bytes: Vec<Vec<u8>>,
+    /// Jump table size
     pub jtbl_rodata_size: usize,
+    /// Function description for error messages
     pub fn_desc: String,
 }
 
@@ -45,7 +95,7 @@ fn is_temp_name(name: &str) -> bool {
 /// * `convert_statics` - How to handle static symbols
 ///
 /// # Returns
-/// * `Result<(), Error>` - Success or error
+/// * `Result<(), ObjFileError>` - Success or error
 pub fn fixup_objfile(
     objfile_path: &Path,
     functions: &[AsmFunction],
@@ -54,9 +104,10 @@ pub fn fixup_objfile(
     output_enc: &str,
     drop_mdebug_gptab: bool,
     convert_statics: &str,
-) -> Result<(), Error> {
+) -> Result<(), ObjFileError> {
     // Read the object file
-    let mut objfile = ElfFile::from_file(objfile_path)?;
+    let mut objfile = ElfFile::from_file(objfile_path)
+        .map_err(|e| ObjFileError::ElfError(e.to_string()))?;
     let fmt = objfile.fmt();
 
     // Track previous locations and sections to copy
@@ -94,7 +145,7 @@ pub fn fixup_objfile(
 
                 let prev_loc = *prev_locs.get(sectype.as_str()).unwrap();
                 if loc < prev_loc {
-                    return Err(Error::ProcessingError(format!(
+                    return Err(ObjFileError::SectionError(format!(
                         "Wrongly computed size for section {} (diff {})",
                         sectype, prev_loc - loc
                     )));
@@ -191,7 +242,7 @@ pub fn fixup_objfile(
         .status()?;
 
     if !status.success() {
-        return Err(Error::ProcessingError("Failed to assemble".to_string()));
+        return Err(ObjFileError::ProcessingError("Failed to assemble".to_string()));
     }
 
     // Read assembled object file
@@ -214,7 +265,7 @@ fn process_sections(
     asm_objfile: &ElfFile,
     to_copy: &HashMap<&str, Vec<(usize, usize, String, String)>>,
     all_text_glabels: &HashSet<String>,
-) -> Result<(), Error> {
+) -> Result<(), ObjFileError> {
     let mut modified_text_positions = HashSet::new();
     let mut jtbl_rodata_positions = HashSet::new();
     let mut last_rodata_pos = 0;
@@ -226,24 +277,24 @@ fn process_sections(
         }
 
         let source = asm_objfile.find_section(sectype)
-            .ok_or_else(|| Error::ProcessingError(format!("didn't find source section: {}", sectype)))?;
+            .ok_or_else(|| ObjFileError::ElfError(format!("didn't find source section: {}", sectype)))?;
 
         // Verify positions and sizes
         for (pos, count, temp_name, fn_desc) in &to_copy[sectype] {
             let loc1 = asm_objfile.symtab.find_symbol_in_section(&format!("{}_asm_start", temp_name), &source)
-                .ok_or_else(|| Error::ProcessingError("symbol not found".to_string()))?;
+                .ok_or_else(|| ObjFileError::ElfError("symbol not found".to_string()))?;
             let loc2 = asm_objfile.symtab.find_symbol_in_section(&format!("{}_asm_end", temp_name), &source)
-                .ok_or_else(|| Error::ProcessingError("symbol not found".to_string()))?;
+                .ok_or_else(|| ObjFileError::ElfError("symbol not found".to_string()))?;
 
             if loc1 != *pos {
-                return Err(Error::ProcessingError(format!(
+                return Err(ObjFileError::SectionError(format!(
                     "assembly and C files don't line up for section {}, {}", 
                     sectype, fn_desc
                 )));
             }
 
             if loc2 - loc1 != *count {
-                return Err(Error::ProcessingError(format!(
+                return Err(ObjFileError::SectionError(format!(
                     "incorrectly computed size for section {}, {}. If using .double, make sure to provide explicit alignment padding.",
                     sectype, fn_desc
                 )));
@@ -257,7 +308,7 @@ fn process_sections(
 
         // Process section data
         let target = objfile.find_section(sectype)
-            .ok_or_else(|| Error::ProcessingError(format!("missing target section of type {}", sectype)))?;
+            .ok_or_else(|| ObjFileError::ElfError(format!("missing target section of type {}", sectype)))?;
 
         let mut data = target.data.to_vec();
         for (pos, count, _, _) in &to_copy[sectype] {
@@ -267,7 +318,9 @@ fn process_sections(
 
             if sectype == ".text" {
                 if count % 4 != 0 || pos % 4 != 0 {
-                    return Err(Error::ProcessingError("text section misaligned".to_string()));
+                    return Err(ObjFileError::SectionError(
+                        "text section misaligned".to_string()
+                    ));
                 }
                 for i in 0..(count / 4) {
                     modified_text_positions.insert(pos + 4 * i);
@@ -287,7 +340,7 @@ fn process_symbols(
     asm_objfile: &ElfFile,
     convert_statics: &str,
     all_text_glabels: &HashSet<String>,
-) -> Result<(), Error> {
+) -> Result<(), ObjFileError> {
     // Merge strtab data
     let strtab_adj = objfile.symtab.strtab.data.len();
     objfile.symtab.strtab.data.extend(&asm_objfile.symtab.strtab.data);
@@ -330,7 +383,7 @@ fn process_symbols(
             let target_section_name = if section_name == ".late_rodata" {
                 ".rodata".to_string()
             } else if !SECTIONS.contains(&section_name.as_str()) {
-                return Err(Error::ProcessingError(format!(
+                return Err(ObjFileError::SymbolError(format!(
                     "generated assembly .o must only have symbols for .text, .data, .rodata, .late_rodata, ABS and UNDEF, but found {}",
                     section_name
                 )));
@@ -339,7 +392,7 @@ fn process_symbols(
             };
 
             let objfile_section = objfile.find_section(&target_section_name)
-                .ok_or_else(|| Error::ProcessingError(format!(
+                .ok_or_else(|| ObjFileError::ElfError(format!(
                     "generated assembly .o has section that real objfile lacks: {}", 
                     target_section_name
                 )))?;
@@ -366,7 +419,7 @@ fn process_symbols(
             if let Some(existing) = name_to_sym.get(&s.name) {
                 if s.st_shndx != SHN_UNDEF && 
                    !(existing.st_shndx == s.st_shndx && existing.st_value == s.st_value) {
-                    return Err(Error::ProcessingError(format!(
+                    return Err(ObjFileError::SymbolError(format!(
                         "symbol \"{}\" defined twice", s.name
                     )));
                 }
@@ -391,7 +444,7 @@ fn process_symbols(
 fn process_relocations(
     objfile: &mut ElfFile,
     asm_objfile: &ElfFile,
-) -> Result<(), Error> {
+) -> Result<(), ObjFileError> {
     // Process relocations for each section
     for &sectype in SECTIONS {
         let target = match objfile.find_section(sectype) {
@@ -471,7 +524,9 @@ fn process_relocations(
                         )?;
                     }
                 }
-                _ => return Err(Error::ProcessingError("unknown relocation type".to_string())),
+                _ => return Err(ObjFileError::RelocationError(
+                    "unknown relocation type".to_string()
+                )),
             }
         }
     }
