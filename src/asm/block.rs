@@ -273,7 +273,7 @@ impl GlobalAsmBlock {
         } else if line.starts_with(".balign") {
             let align = line.split_whitespace()
                 .nth(1)
-                .and_then(|s| s.parse().ok())
+                .and_then(|s| s.parse::<usize>().ok())
                 .ok_or_else(|| self.fail("invalid .balign value", Some(&real_line)))?;
             if align != 4 {
                 return Err(self.fail("only .balign 4 is supported", Some(&real_line)));
@@ -282,7 +282,7 @@ impl GlobalAsmBlock {
         } else if line.starts_with(".align") {
             let align = line.split_whitespace()
                 .nth(1)
-                .and_then(|s| s.parse().ok())
+                .and_then(|s| s.parse::<usize>().ok())
                 .ok_or_else(|| self.fail("invalid .align value", Some(&real_line)))?;
             if align != 2 {
                 return Err(self.fail("only .align 2 is supported", Some(&real_line)));
