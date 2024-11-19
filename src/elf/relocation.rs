@@ -11,21 +11,24 @@ pub struct Relocation {
 
 impl Relocation {
     pub fn new(fmt: &ElfFormat, data: &[u8], sh_type: u32) -> Result<Self, Error> {
-        let (offset, info) = fmt.unpack_tuple_u32(data)?;
+        if data.len() < 8 {
+            return Err(Error::InvalidFormat("Relocation data too short".into()));
+        }
 
+        let r_offset = fmt.unpack_u32(&data[0..4])?;
+        let r_info = fmt.unpack_u32(&data[4..8])?;
         let r_addend = if sh_type == SHT_RELA {
             if data.len() < 12 {
-                return Err(Error::InvalidRelocation("RELA entry too short".into()));
+                return Err(Error::InvalidFormat("RELA data too short".into()));
             }
-            let (_, _, addend) = fmt.unpack_tuple_u32_3(data)?;
-            Some(addend)
+            Some(fmt.unpack_u32(&data[8..12])?)
         } else {
             None
         };
 
         Ok(Self {
-            r_offset: offset,
-            r_info: info,
+            r_offset,
+            r_info,
             r_addend,
         })
     }
@@ -38,14 +41,20 @@ impl Relocation {
         (self.r_info & 0xff) as u8
     }
 
-    pub fn pack(&self, fmt: &ElfFormat) -> Vec<u8> {
-        let mut result = fmt.pack_tuple_u32_10(
+    pub fn offset(&self) -> u32 {
+        self.r_offset
+    }
+
+    pub fn to_bytes(&self, fmt: &ElfFormat) -> Vec<u8> {
+        let mut result = fmt.pack_tuple_u32_10((
             self.r_offset,
             self.r_info,
             self.r_addend.unwrap_or(0),
             0, 0, 0, 0, 0, 0, 0
-        );
-        result.truncate(if self.r_addend.is_some() { 12 } else { 8 });
+        ));
+        if self.r_addend.is_none() {
+            result.truncate(8);
+        }
         result
     }
 }
@@ -92,7 +101,7 @@ mod tests {
             r_addend: Some(0x11223344),
         };
 
-        let packed = reloc.pack(&fmt);
+        let packed = reloc.to_bytes(&fmt);
         let unpacked = Relocation::new(&fmt, &packed, SHT_RELA).unwrap();
 
         assert_eq!(unpacked.r_offset, reloc.r_offset);

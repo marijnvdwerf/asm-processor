@@ -2,7 +2,7 @@ use crate::utils::Error;
 use crate::elf::format::ElfFormat;
 use crate::elf::constants::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Symbol {
     pub st_name: u32,
     pub st_value: u32,
@@ -10,11 +10,22 @@ pub struct Symbol {
     pub st_info: u8,
     pub st_other: u8,
     pub st_shndx: u16,
+    pub name: String,
 }
 
 impl Symbol {
     pub fn new(fmt: &ElfFormat, data: &[u8]) -> Result<Self, Error> {
-        let (st_name, st_value, st_size, st_info, st_other, st_shndx) = fmt.unpack_symbol(data)?;
+        if data.len() < 16 {
+            return Err(Error::InvalidFormat("Symbol data too short".into()));
+        }
+
+        let st_name = fmt.unpack_u32(&data[0..4])?;
+        let st_value = fmt.unpack_u32(&data[4..8])?;
+        let st_size = fmt.unpack_u32(&data[8..12])?;
+        let st_info = data[12];
+        let st_other = data[13];
+        let st_shndx = fmt.unpack_u16(&data[14..16])?;
+
         Ok(Self {
             st_name,
             st_value,
@@ -22,6 +33,7 @@ impl Symbol {
             st_info,
             st_other,
             st_shndx,
+            name: String::new(),
         })
     }
 
@@ -41,10 +53,15 @@ impl Symbol {
         self.st_info = (self.st_info & 0xf0) | (type_ & 0xf);
     }
 
-    pub fn pack(&self, fmt: &ElfFormat) -> Vec<u8> {
-        fmt.pack_symbol(self.st_name, self.st_value, self.st_size, 
-            ((self.st_info as u16) << 8) | (self.st_other as u16), 
-            self.st_shndx)
+    pub fn to_bytes(&self, fmt: &ElfFormat) -> Vec<u8> {
+        let mut result = Vec::with_capacity(16);
+        result.extend_from_slice(&fmt.pack_u32(self.st_name));
+        result.extend_from_slice(&fmt.pack_u32(self.st_value));
+        result.extend_from_slice(&fmt.pack_u32(self.st_size));
+        result.push(self.st_info);
+        result.push(self.st_other);
+        result.extend_from_slice(&fmt.pack_u16(self.st_shndx));
+        result
     }
 }
 
@@ -61,6 +78,7 @@ mod tests {
             st_info: 0x23,  // bind = 2, type = 3
             st_other: 0,
             st_shndx: 0,
+            name: String::new(),
         };
 
         assert_eq!(symbol.bind(), 2);
@@ -82,9 +100,10 @@ mod tests {
             st_info: 0x23,
             st_other: 0x45,
             st_shndx: 0x6789,
+            name: String::new(),
         };
 
-        let packed = original.pack(&fmt);
+        let packed = original.to_bytes(&fmt);
         let unpacked = Symbol::new(&fmt, &packed).unwrap();
 
         assert_eq!(unpacked.st_name, original.st_name);

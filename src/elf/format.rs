@@ -1,48 +1,42 @@
 use crate::utils::Error;
-use byteorder::{BigEndian, ByteOrder, LittleEndian};
+use crate::elf::Symbol;
+use std::convert::TryInto;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ElfFormat {
-    big_endian: bool,
+    pub is_big_endian: bool,
 }
 
 impl ElfFormat {
-    pub fn new(big_endian: bool) -> Self {
-        Self { big_endian }
+    pub fn new(is_big_endian: bool) -> Self {
+        Self { is_big_endian }
     }
 
-    pub fn default() -> Self {
-        Self { big_endian: true }
-    }
-
-    pub fn pack_u16(&self, value: u16) -> [u8; 2] {
-        let mut buf = [0; 2];
-        if self.big_endian {
-            BigEndian::write_u16(&mut buf, value);
+    pub fn pack_u16(&self, value: u16) -> Vec<u8> {
+        if self.is_big_endian {
+            value.to_be_bytes().to_vec()
         } else {
-            LittleEndian::write_u16(&mut buf, value);
+            value.to_le_bytes().to_vec()
         }
-        buf
     }
 
-    pub fn pack_u32(&self, value: u32) -> [u8; 4] {
-        let mut buf = [0; 4];
-        if self.big_endian {
-            BigEndian::write_u32(&mut buf, value);
+    pub fn pack_u32(&self, value: u32) -> Vec<u8> {
+        if self.is_big_endian {
+            value.to_be_bytes().to_vec()
         } else {
-            LittleEndian::write_u32(&mut buf, value);
+            value.to_le_bytes().to_vec()
         }
-        buf
     }
 
     pub fn unpack_u16(&self, data: &[u8]) -> Result<u16, Error> {
         if data.len() < 2 {
             return Err(Error::InvalidFormat("Data too short for u16".into()));
         }
-        Ok(if self.big_endian {
-            BigEndian::read_u16(data)
+        let bytes: [u8; 2] = data[..2].try_into().unwrap();
+        Ok(if self.is_big_endian {
+            u16::from_be_bytes(bytes)
         } else {
-            LittleEndian::read_u16(data)
+            u16::from_le_bytes(bytes)
         })
     }
 
@@ -50,16 +44,62 @@ impl ElfFormat {
         if data.len() < 4 {
             return Err(Error::InvalidFormat("Data too short for u32".into()));
         }
-        Ok(if self.big_endian {
-            BigEndian::read_u32(data)
+        let bytes: [u8; 4] = data[..4].try_into().unwrap();
+        Ok(if self.is_big_endian {
+            u32::from_be_bytes(bytes)
         } else {
-            LittleEndian::read_u32(data)
+            u32::from_le_bytes(bytes)
         })
+    }
+
+    pub fn pack_tuple_u32_25(&self, tuple: (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32)) -> Vec<u8> {
+        let mut result = Vec::with_capacity(25 * 4);
+        let values = [
+            tuple.0, tuple.1, tuple.2, tuple.3, tuple.4, tuple.5, tuple.6, tuple.7, tuple.8, tuple.9,
+            tuple.10, tuple.11, tuple.12, tuple.13, tuple.14, tuple.15, tuple.16, tuple.17, tuple.18, tuple.19,
+            tuple.20, tuple.21, tuple.22, tuple.23, tuple.24,
+        ];
+        for value in values.iter() {
+            result.extend_from_slice(&self.pack_u32(*value));
+        }
+        result
+    }
+
+    pub fn unpack_tuple_u32_25(&self, data: &[u8]) -> Result<(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32), Error> {
+        if data.len() < 25 * 4 {
+            return Err(Error::InvalidFormat("Data too short for unpacking 25 u32s".into()));
+        }
+
+        let mut values = Vec::with_capacity(25);
+        for i in 0..25 {
+            values.push(self.unpack_u32(&data[i * 4..(i + 1) * 4])?);
+        }
+
+        Ok((
+            values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7], values[8], values[9],
+            values[10], values[11], values[12], values[13], values[14], values[15], values[16], values[17], values[18], values[19],
+            values[20], values[21], values[22], values[23], values[24],
+        ))
+    }
+
+    pub fn pack_tuple_u32_10(&self, tuple: (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32)) -> Vec<u8> {
+        let mut result = Vec::with_capacity(40);
+        result.extend_from_slice(&self.pack_u32(tuple.0));
+        result.extend_from_slice(&self.pack_u32(tuple.1));
+        result.extend_from_slice(&self.pack_u32(tuple.2));
+        result.extend_from_slice(&self.pack_u32(tuple.3));
+        result.extend_from_slice(&self.pack_u32(tuple.4));
+        result.extend_from_slice(&self.pack_u32(tuple.5));
+        result.extend_from_slice(&self.pack_u32(tuple.6));
+        result.extend_from_slice(&self.pack_u32(tuple.7));
+        result.extend_from_slice(&self.pack_u32(tuple.8));
+        result.extend_from_slice(&self.pack_u32(tuple.9));
+        result
     }
 
     pub fn unpack_tuple_u32(&self, data: &[u8]) -> Result<(u32, u32), Error> {
         if data.len() < 8 {
-            return Err(Error::InvalidFormat("Data too short for u32 tuple".into()));
+            return Err(Error::InvalidFormat("Data too short for tuple".into()));
         }
         Ok((
             self.unpack_u32(&data[0..4])?,
@@ -69,115 +109,40 @@ impl ElfFormat {
 
     pub fn unpack_tuple_u32_3(&self, data: &[u8]) -> Result<(u32, u32, u32), Error> {
         if data.len() < 12 {
-            return Err(Error::InvalidFormat("Data too short for u32 tuple".into()));
+            return Err(Error::InvalidFormat("Data too short for tuple".into()));
         }
         Ok((
             self.unpack_u32(&data[0..4])?,
             self.unpack_u32(&data[4..8])?,
             self.unpack_u32(&data[8..12])?,
         ))
+    }
+
+    pub fn pack_symbol(&self, symbol: &Symbol) -> Vec<u8> {
+        let mut result = Vec::with_capacity(16);
+        result.extend_from_slice(&self.pack_u32(symbol.st_name));
+        result.extend_from_slice(&self.pack_u32(symbol.st_value));
+        result.extend_from_slice(&self.pack_u32(symbol.st_size));
+        let info_other = ((symbol.st_info as u16) << 8) | (symbol.st_other as u16);
+        result.extend_from_slice(&self.pack_u16(info_other));
+        result.extend_from_slice(&self.pack_u16(symbol.st_shndx));
+        result
     }
 
     pub fn unpack_symbol(&self, data: &[u8]) -> Result<(u32, u32, u32, u8, u8, u16), Error> {
         if data.len() < 16 {
-            return Err(Error::InvalidFormat("Data too short for symbol".into()));
+            return Err(Error::InvalidFormat("Symbol data too short".into()));
         }
-        Ok((
-            self.unpack_u32(&data[0..4])?,   // st_name
-            self.unpack_u32(&data[4..8])?,   // st_value
-            self.unpack_u32(&data[8..12])?,  // st_size
-            data[12],                       // st_info
-            data[13],                       // st_other
-            self.unpack_u16(&data[14..16])?, // st_shndx
-        ))
-    }
 
-    pub fn unpack_tuple_u32_10(&self, data: &[u8]) -> Result<(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32), Error> {
-        if data.len() < 40 {
-            return Err(Error::InvalidFormat("Data too short for u32 tuple".into()));
-        }
-        Ok((
-            self.unpack_u32(&data[0..4])?,
-            self.unpack_u32(&data[4..8])?,
-            self.unpack_u32(&data[8..12])?,
-            self.unpack_u32(&data[12..16])?,
-            self.unpack_u32(&data[16..20])?,
-            self.unpack_u32(&data[20..24])?,
-            self.unpack_u32(&data[24..28])?,
-            self.unpack_u32(&data[28..32])?,
-            self.unpack_u32(&data[32..36])?,
-            self.unpack_u32(&data[36..40])?,
-        ))
-    }
+        let st_name = self.unpack_u32(&data[0..4])?;
+        let st_value = self.unpack_u32(&data[4..8])?;
+        let st_size = self.unpack_u32(&data[8..12])?;
+        let info_other = self.unpack_u16(&data[12..14])?;
+        let st_info = (info_other >> 8) as u8;
+        let st_other = (info_other & 0xff) as u8;
+        let st_shndx = self.unpack_u16(&data[14..16])?;
 
-    pub fn pack_tuple_u32_10(
-        &self,
-        v1: u32,
-        v2: u32,
-        v3: u32,
-        v4: u32,
-        v5: u32,
-        v6: u32,
-        v7: u32,
-        v8: u32,
-        v9: u32,
-        v10: u32,
-    ) -> Vec<u8> {
-        let mut result = Vec::with_capacity(40);
-        result.extend_from_slice(&self.pack_u32(v1));
-        result.extend_from_slice(&self.pack_u32(v2));
-        result.extend_from_slice(&self.pack_u32(v3));
-        result.extend_from_slice(&self.pack_u32(v4));
-        result.extend_from_slice(&self.pack_u32(v5));
-        result.extend_from_slice(&self.pack_u32(v6));
-        result.extend_from_slice(&self.pack_u32(v7));
-        result.extend_from_slice(&self.pack_u32(v8));
-        result.extend_from_slice(&self.pack_u32(v9));
-        result.extend_from_slice(&self.pack_u32(v10));
-        result
-    }
-
-    pub fn unpack_tuple_u32_25(&self, data: &[u8]) -> Result<(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32), Error> {
-        if data.len() < 100 {
-            return Err(Error::InvalidFormat("Data too short for u32 tuple".into()));
-        }
-        Ok((
-            self.unpack_u32(&data[0..4])?,
-            self.unpack_u32(&data[4..8])?,
-            self.unpack_u32(&data[8..12])?,
-            self.unpack_u32(&data[12..16])?,
-            self.unpack_u32(&data[16..20])?,
-            self.unpack_u32(&data[20..24])?,
-            self.unpack_u32(&data[24..28])?,
-            self.unpack_u32(&data[28..32])?,
-            self.unpack_u32(&data[32..36])?,
-            self.unpack_u32(&data[36..40])?,
-            self.unpack_u32(&data[40..44])?,
-            self.unpack_u32(&data[44..48])?,
-            self.unpack_u32(&data[48..52])?,
-            self.unpack_u32(&data[52..56])?,
-            self.unpack_u32(&data[56..60])?,
-            self.unpack_u32(&data[60..64])?,
-            self.unpack_u32(&data[64..68])?,
-            self.unpack_u32(&data[68..72])?,
-            self.unpack_u32(&data[72..76])?,
-            self.unpack_u32(&data[76..80])?,
-            self.unpack_u32(&data[80..84])?,
-            self.unpack_u32(&data[84..88])?,
-            self.unpack_u32(&data[88..92])?,
-            self.unpack_u32(&data[92..96])?,
-            self.unpack_u32(&data[96..100])?,
-        ))
-    }
-
-    pub fn pack_symbol(&self, st_name: u32, st_value: u32, st_size: u32, info_other: u16, st_shndx: u16) -> Vec<u8> {
-        let mut result = Vec::with_capacity(16);
-        result.extend_from_slice(&self.pack_u32(st_name));
-        result.extend_from_slice(&self.pack_u32(st_value));
-        result.extend_from_slice(&self.pack_u32(st_size));
-        result.extend_from_slice(&self.pack_u16(info_other));
-        result.extend_from_slice(&self.pack_u16(st_shndx));
-        result
+        Ok((st_name, st_value, st_size, st_info, st_other, st_shndx))
     }
 }
 
