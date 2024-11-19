@@ -84,6 +84,17 @@ impl ElfFormat {
             self.unpack_u32(&data[8..12])
         )
     }
+
+    pub fn unpack_symbol(&self, data: &[u8]) -> (u32, u32, u32, u8, u8, u16) {
+        (
+            self.unpack_u32(&data[0..4]),   // st_name
+            self.unpack_u32(&data[4..8]),   // st_value
+            self.unpack_u32(&data[8..12]),  // st_size
+            data[12],                       // st_info
+            data[13],                       // st_other
+            self.unpack_u16(&data[14..16]), // st_shndx
+        )
+    }
 }
 
 #[cfg(test)]
@@ -152,5 +163,25 @@ mod tests {
         assert_eq!(a, 0x12345678);
         assert_eq!(b, 0xabcdef01);
         assert_eq!(c, 0x87654321);
+    }
+
+    #[test]
+    fn test_unpack_symbol() {
+        let fmt = ElfFormat::new(true);
+        let mut data = Vec::new();
+        data.extend_from_slice(&fmt.pack_u32(0x12345678)); // st_name
+        data.extend_from_slice(&fmt.pack_u32(0xabcdef01)); // st_value
+        data.extend_from_slice(&fmt.pack_u32(0x11223344)); // st_size
+        data.push(0x12); // st_info
+        data.push(0x34); // st_other
+        data.extend_from_slice(&fmt.pack_u16(0x5678)); // st_shndx
+
+        let (name, value, size, info, other, shndx) = fmt.unpack_symbol(&data);
+        assert_eq!(name, 0x12345678);
+        assert_eq!(value, 0xabcdef01);
+        assert_eq!(size, 0x11223344);
+        assert_eq!(info, 0x12);
+        assert_eq!(other, 0x34);
+        assert_eq!(shndx, 0x5678);
     }
 }

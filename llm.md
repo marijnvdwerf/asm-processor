@@ -11,9 +11,13 @@
 - ELF-specific constants module
 - ELF header implementation with validation
 - ELF relocation module implementation
+- ELF symbol module implementation
+- Basic ELF section module implementation
+- Basic ELF file module implementation
 
 ### In Progress
 - Converting core modules
+- Implementing ELF section module
 
 ### Todo
 - Implement remaining ELF modules
@@ -34,9 +38,9 @@
 - [x] format.rs (complete with tests)
 - [x] header.rs (complete with tests)
 - [x] relocation.rs (complete with tests)
-- [ ] symbol.rs
-- [ ] section.rs
-- [ ] file.rs
+- [x] symbol.rs (complete with tests)
+- [ ] section.rs (in progress)
+- [ ] file.rs (in progress)
 - [ ] Complete implementation
 - [ ] Tests
 
@@ -84,7 +88,13 @@ Notes on Circular Dependencies:
 - [ ] Tests
 
 ## Current Focus
-Converting symbol.rs as the next ELF module
+Implementing the full ElfSection functionality
+
+## Next Steps
+1. Implement string table lookup in Section trait
+2. Complete ElfSection implementation
+3. Add section parsing to ElfFile
+4. Implement symbol and relocation handling in ElfFile
 
 ## Implementation Notes
 
@@ -120,3 +130,31 @@ Converting symbol.rs as the next ELF module
   * RELA parsing and roundtrip
   * Symbol index and type extraction
 - Proper handling of optional addend field
+
+### section.rs
+- Created Section trait for string table lookups
+- Defined ElfSection structure with:
+  * Standard ELF section fields
+  * Section data storage
+  * Format handling
+- Prepared for future implementation
+- TODO: Implement string table functionality
+
+### symbol.rs
+- Implemented complete symbol entry parsing and writing
+- Added support for both string table and direct name specification
+- Efficient bit manipulation for bind and type fields
+- Added comprehensive test suite:
+  * Basic parsing and roundtrip
+  * Error handling for SHN_XINDEX
+  * Symbol name resolution
+- Proper handling of visibility flags
+
+### file.rs
+- Created basic ElfFile structure
+- Defined core components:
+  * ELF header
+  * Section list
+  * Format handling
+- TODO: Implement full file parsing and writing
+- TODO: Add symbol and relocation handling

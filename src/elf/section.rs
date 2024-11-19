@@ -1,12 +1,11 @@
-#[derive(Debug, Clone)]
-pub struct Section {
-    pub name: String,
-    pub header: SectionHeader,
-    pub data: Vec<u8>,
+use crate::elf::format::ElfFormat;
+
+pub trait Section {
+    fn lookup_str(&self, offset: u32) -> String;
 }
 
 #[derive(Debug, Clone)]
-pub struct SectionHeader {
+pub struct ElfSection {
     pub sh_name: u32,
     pub sh_type: u32,
     pub sh_flags: u32,
@@ -17,4 +16,9 @@ pub struct SectionHeader {
     pub sh_info: u32,
     pub sh_addralign: u32,
     pub sh_entsize: u32,
+    pub name: String,
+    pub data: Vec<u8>,
+    pub fmt: ElfFormat,
 }
+
+// TODO: Implement ElfSection
