@@ -10,6 +10,9 @@ use asm_processor::{run, parse_source, utils::options::Opts, ProcessorOutput, Ar
 use tempfile::TempDir;
 use uuid::Uuid;
 
+// Include the default prelude content at compile time
+const DEFAULT_PRELUDE: &str = include_str!("../../prelude.inc");
+
 #[derive(Debug)]
 struct BuildConfig {
     asmproc_flags: Vec<String>,
@@ -19,7 +22,6 @@ struct BuildConfig {
     out_file: PathBuf,
     in_file: PathBuf,
     keep_preprocessed: bool,
-    asm_prelude_path: PathBuf,
 }
 
 fn parse_args() -> BuildConfig {
@@ -84,7 +86,6 @@ fn parse_args() -> BuildConfig {
         out_file,
         in_file,
         keep_preprocessed: false,
-        asm_prelude_path,
     }
 }
 
@@ -204,7 +205,7 @@ fn run_post_processor(
         filename: config.in_file.clone(),
         post_process: Some(config.out_file.clone()),
         assembler: Some(config.assembler_args.join(" ")),
-        asm_prelude: Some(config.asm_prelude_path.clone()),
+        asm_prelude: Some(DEFAULT_PRELUDE.to_string()),
         input_enc: "latin1".to_string(),
         output_enc: "latin1".to_string(),
         drop_mdebug_gptab: false,

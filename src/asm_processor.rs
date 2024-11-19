@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::io::BufReader;
 use std::fs::File;
 use clap::{Parser, ArgGroup};
@@ -9,7 +9,7 @@ use crate::processor::parse_source;
 use crate::objfile::fixup_objfile;
 use crate::utils::{Error, Result};
 
-
+/// Processor output
 #[derive(Debug)]
 pub struct ProcessorOutput {
     pub functions: Vec<Function>,
@@ -36,9 +36,9 @@ pub struct Args {
     #[arg(long)]
     pub assembler: Option<String>,
 
-    /// Path to a file containing a prelude to the assembly file
+    /// Path to a file containing a prelude to the assembly file, or the prelude content itself
     #[arg(long)]
-    pub asm_prelude: Option<PathBuf>,
+    pub asm_prelude: Option<String>,
 
     /// Input encoding (default: latin1)
     #[arg(long, default_value = "latin1")]
@@ -171,11 +171,16 @@ pub fn run(args: &Args) -> Result<Option<ProcessorOutput>> {
         return Ok(None);
     }
 
-    let asm_prelude = args.asm_prelude
-        .as_ref()
-        .map(std::fs::read)
-        .transpose()?
-        .unwrap_or_default();
+    let asm_prelude = match &args.asm_prelude {
+        Some(prelude) => {
+            if Path::new(prelude).exists() {
+                std::fs::read(prelude)?
+            } else {
+                prelude.as_bytes().to_vec()
+            }
+        }
+        None => Vec::new(),
+    };
 
     fixup_objfile(
         objfile,
