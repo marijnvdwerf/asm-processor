@@ -1,5 +1,6 @@
 use std::fs::File;
-use std::io::{Write, Seek, SeekFrom};
+use std::io::{Write, Seek, SeekFrom, Read};
+use std::path::Path;
 use crate::utils::Error;
 use crate::elf::format::ElfFormat;
 use crate::elf::header::ElfHeader;
@@ -15,6 +16,14 @@ pub struct ElfFile {
 }
 
 impl ElfFile {
+    /// Create a new ElfFile from a file path
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Error> {
+        let mut file = File::open(path)?;
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)?;
+        Self::new(&data)
+    }
+
     pub fn new(data: &[u8]) -> Result<Self, Error> {
         // Check ELF magic
         if data.len() < 4 || &data[0..4] != b"\x7fELF" {
