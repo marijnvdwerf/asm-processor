@@ -206,32 +206,67 @@ mod tests {
         fmt.pack_u16(&mut data[16..18], 1)?; 
         fmt.pack_u16(&mut data[18..20], 8)?; // EM_MIPS
 
-        fmt.pack_u32(&mut data[32..36], 0x100)?; // e_shoff
-        fmt.pack_u16(&mut data[50..52], 1)?; // e_shstrndx
-
-
-
         // Set these values in the raw data
         fmt.pack_u32(&mut data[24..28], 1)?; // e_version
         fmt.pack_u16(&mut data[46..48], 40)?; // e_shentsize
-        fmt.pack_u16(&mut data[48..50], 2)?; // e_shnum
-
+        fmt.pack_u16(&mut data[48..50], 3)?; // e_shnum - now 3 sections
         
+        // Create sections data
+        let strtab_offset = 0x200;
+        let symtab_offset = 0x300;
         
-        // Create a string table section
+        // Create string table data
+        let strtab_data = b"\0.strtab\0.symtab\0.test\0";
+        println!("String table data: {:?}", strtab_data);
+        data[strtab_offset..strtab_offset + strtab_data.len()].copy_from_slice(strtab_data);
+        
+        // Create symbol table data (just a null symbol)
+        let symtab_data = vec![0; 16];
+        data[symtab_offset..symtab_offset + symtab_data.len()].copy_from_slice(&symtab_data);
+        
+        // Create section headers at offset 0x100
+        let sh_offset = 0x100;
+        
+        // Null section
+        let mut null_section = ElfSection::default();
+        null_section.sh_name = 0;
+        data[sh_offset..sh_offset + 40].copy_from_slice(&null_section.to_bytes());
+        
+        // String table section
         let mut strtab = ElfSection::default();
         strtab.sh_type = SHT_STRTAB;
-        strtab.data = b"\0.test\0".to_vec();
-        strtab.sh_size = strtab.data.len() as u32;
-        
-        // Write section headers
-        let sh_offset = 0x100;
-        let null_section = ElfSection::default();
-        data[sh_offset..sh_offset + 40].copy_from_slice(&null_section.to_bytes());
+        strtab.sh_offset = strtab_offset as u32;
+        strtab.sh_size = strtab_data.len() as u32;
+        strtab.sh_name = 1; // Points to ".strtab" in the string table
+        strtab.data = strtab_data.to_vec();
+        println!("String table section data: {:?}", strtab.data);
         data[sh_offset + 40..sh_offset + 80].copy_from_slice(&strtab.to_bytes());
+        
+        // Symbol table section
+        let mut symtab = ElfSection::default();
+        symtab.sh_type = SHT_SYMTAB;
+        symtab.sh_link = 1; // Link to string table
+        symtab.sh_offset = symtab_offset as u32;
+        symtab.sh_size = symtab_data.len() as u32;
+        symtab.sh_entsize = 16;
+        symtab.sh_name = 8; // Points to ".symtab" in the string table
+        symtab.data = symtab_data.clone();
+        data[sh_offset + 80..sh_offset + 120].copy_from_slice(&symtab.to_bytes());
+        
+        // Set section header offset in ELF header
+        fmt.pack_u32(&mut data[32..36], sh_offset as u32)?; // e_shoff
+        fmt.pack_u16(&mut data[50..52], 1)?; // e_shstrndx - points to strtab
         
         // Create ELF file from test data
         let mut elf = ElfFile::new(&data)?;
+        println!("Created ELF file with {} sections", elf.sections.len());
+        for (i, section) in elf.sections.iter().enumerate() {
+            println!("Section {}: type={}, offset={}, size={}, data.len()={}", 
+                    i, section.sh_type, section.sh_offset, section.sh_size, section.data.len());
+            if section.sh_type == SHT_STRTAB {
+                println!("String table data after init: {:?}", section.data);
+            }
+        }
         
         // Add a new section
         let new_section_idx = elf.add_section(

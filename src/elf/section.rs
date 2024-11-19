@@ -169,6 +169,7 @@ impl ElfSection {
         let ret = self.data.len() as u32;
         self.data.extend_from_slice(string.as_bytes());
         self.data.push(0);
+        self.sh_size = self.data.len() as u32;  // Update sh_size to match data length
         Ok(ret)
     }
 
