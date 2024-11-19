@@ -99,16 +99,56 @@ src/
 │   └── file.rs         // ElfFile: Main ELF processing
 ├── asm/
 │   ├── mod.rs           // Re-exports ASM modules
-│   ├── block.rs         // GlobalAsmBlock: Assembly processing
-│   └── function.rs      // Function struct and related code
+│   ├── block.rs         // GlobalAsmBlock: Assembly block processing
+│   └── function.rs      // Function: Assembly function handling
 ├── utils/
-│   ├── mod.rs           // Re-exports utilities
+│   ├── mod.rs           // Re-exports utility modules
 │   ├── state.rs         // GlobalState: Processing state
-│   └── error.rs         // Custom error types
-├── processor.rs        // parse_source: Main processing logic
-├── objfile.rs         // fixup_objfile: Object file handling
+│   ├── error.rs         // Error: Error handling
+│   └── constants.rs     // Constants: Shared constants
+├── processor.rs        // parse_source: Main source processing
+├── objfile.rs         // fixup_objfile: Object file processing
 └── lib.rs              // Library entry point
-```
+
+### Key Components
+
+1. **ELF Processing (`elf/`)**
+   - Core ELF file manipulation
+   - Section and symbol management
+   - Relocation handling
+   - Endianness support
+
+2. **Assembly Processing (`asm/`)**
+   - Assembly block parsing and processing
+   - Function structure and management
+   - Late rodata handling
+   - Section size tracking
+   - Assembly directive processing
+
+3. **Utilities (`utils/`)**
+   - Global state management
+   - Error handling with custom Error types
+   - Shared constants
+   - Common functionality
+
+### Code Organization Rules
+
+1. **Rust Idioms**
+   - Use Result for error handling
+   - Implement proper traits (Debug, Clone)
+   - Strong type safety with proper validation
+   - Memory safety with ownership rules
+
+2. **Module Structure**
+   - Each component in its own module
+   - Clear module hierarchy
+   - Proper visibility rules
+   - Re-exports through mod.rs
+
+3. **Dependencies**
+   - Minimal external dependencies
+   - Use of lazy_static for regex
+   - Proper error handling traits
 
 ### Key Data Structures
 

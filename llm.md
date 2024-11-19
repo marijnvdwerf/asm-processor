@@ -14,10 +14,13 @@
 - ELF symbol module implementation
 - Basic ELF section module implementation
 - Basic ELF file module implementation
+- ASM block module implementation
+- ASM function module implementation
 
 ### In Progress
 - Converting core modules
 - Implementing ELF section module
+- Implementing ASM processing modules
 
 ### Todo
 - Implement remaining ELF modules
@@ -84,11 +87,13 @@ Notes on Circular Dependencies:
 
 ### asm/
 - [x] Basic structures
+- [x] block.rs (complete implementation)
+- [x] function.rs (complete implementation)
 - [ ] Complete implementation
 - [ ] Tests
 
 ## Current Focus
-Completing the ELF processing modules with proper error handling and validation.
+Completing the ASM processing modules with proper error handling and validation.
 
 ## Recent Changes
 
@@ -107,37 +112,65 @@ Completing the ELF processing modules with proper error handling and validation.
 - Updated tests to be more comprehensive
 - Improved code organization and documentation
 
+#### 2024-01-19: ASM Block Module Implementation
+- Implemented GlobalAsmBlock structure with comprehensive error handling
+- Added proper Function struct with all required fields
+- Implemented assembly directive processing
+- Added late rodata handling
+- Fixed compilation issues and type safety
+- Added constants module for shared constants
+- All code compiling with proper error handling
+
+### block.rs Implementation Details
+- Created GlobalAsmBlock structure for assembly processing
+- Implemented line-by-line assembly processing
+- Added support for:
+  - Section tracking (.text, .data, .rodata, etc.)
+  - Late rodata generation and alignment
+  - Function size management
+  - Assembly directive handling
+  - Error context with line information
+- Used lazy_static for regex compilation
+- Proper error handling with custom Error types
+- Strong type safety throughout
+
+### function.rs Updates
+- Replaced size-based fields with detailed data structures
+- Added fields for:
+  - text_glabels: Labels in text section
+  - asm_conts: Assembly contents
+  - late_rodata_dummy_bytes: Late rodata placeholders
+  - jtbl_rodata_size: Jump table size
+  - late_rodata_asm_conts: Late rodata assembly
+  - fn_desc: Function description
+  - data: Section data mapping
+- Implemented proper traits (Debug, Clone)
+- Strong type safety with HashMap and Vec
+
 ## Next Steps
-1. Complete section.rs implementation:
-   - Add support for all section types
-   - Implement full section data handling
-   - Add comprehensive validation
+1. Complete ASM processing implementation
+   - Add comprehensive tests
+   - Verify late rodata handling
+   - Test section size tracking
+   - Validate assembly directive processing
 
-2. Finish file.rs implementation:
-   - Add ELF file parsing
-   - Implement section table handling
-   - Add symbol table support
-   - Add relocation handling
+2. Integration with ELF modules
+   - Connect ASM and ELF processing
+   - Verify section handling
+   - Test symbol generation
+   - Validate relocations
 
-3. Start Assembly processing modules:
-   - Port asm/block.py
-   - Implement function handling
-   - Add assembly block processing
-
-4. Add integration tests:
-   - End-to-end file processing tests
-   - Cross-module integration tests
-   - Error handling tests
-
-5. Performance optimization:
+3. Performance optimization
    - Profile code performance
-   - Optimize memory usage
-   - Improve parsing speed
+   - Optimize regex usage
+   - Improve memory usage
+   - Enhance error handling
 
-6. Documentation:
-   - Add comprehensive module docs
-   - Document public APIs
-   - Add usage examples
+4. Testing and validation
+   - Add unit tests
+   - Create integration tests
+   - Verify Python parity
+   - Test edge cases
 
 ## Implementation Notes
 
