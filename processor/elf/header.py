@@ -21,7 +21,7 @@ class ElfHeader:
     } Elf32_Ehdr;
     """
 
-    def __init__(self, data):
+    def __init__(self, data: bytes) -> None:
         self.e_ident = data[:EI_NIDENT]
         assert self.e_ident[EI_CLASS] == 1 # 32-bit
         self.fmt = ElfFormat(is_big_endian=(self.e_ident[EI_DATA] == 2))
@@ -32,7 +32,7 @@ class ElfHeader:
         assert self.e_shoff != 0 # section header
         assert self.e_shstrndx != SHN_UNDEF
 
-    def to_bin(self):
+    def to_bin(self) -> bytes:
         return self.e_ident + self.fmt.pack('HHIIIIIHHHHHH', self.e_type,
                 self.e_machine, self.e_version, self.e_entry, self.e_phoff,
                 self.e_shoff, self.e_flags, self.e_ehsize, self.e_phentsize,

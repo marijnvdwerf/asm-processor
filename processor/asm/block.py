@@ -1,3 +1,4 @@
+from typing import Dict, List, Match, Optional, Tuple
 import re
 from .function import Function
 from ..utils.errors import Failure
@@ -6,7 +7,7 @@ import struct
 
 
 # https://stackoverflow.com/a/241506
-def re_comment_replacer(match):
+def re_comment_replacer(match: Match[str]) -> str:
     s = match.group(0)
     if s[0] in "/#":
         return " "
@@ -20,7 +21,7 @@ re_comment_or_string = re.compile(
 
 
 class GlobalAsmBlock:
-    def __init__(self, fn_desc):
+    def __init__(self, fn_desc: str) -> None:
         self.fn_desc = fn_desc
         self.cur_section = '.text'
         self.asm_conts = []
@@ -39,13 +40,13 @@ class GlobalAsmBlock:
         self.glued_line = ''
         self.num_lines = 0
 
-    def fail(self, message, line=None):
+    def fail(self, message: str, line: Optional[str] = None) -> None:
         context = self.fn_desc
         if line:
             context += ", at line \"" + line + "\""
         raise Failure(message + "\nwithin " + context)
 
-    def count_quoted_size(self, line, z, real_line, output_enc):
+    def count_quoted_size(self, line: str, z: bool, real_line: str, output_enc: str) -> int:
         line = line.encode(output_enc).decode('latin1')
         in_quote = False
         has_comma = True
@@ -94,15 +95,15 @@ class GlobalAsmBlock:
             self.fail(".ascii with no string", real_line)
         return ret + num_parts if z else ret
 
-    def align2(self):
+    def align2(self) -> None:
         while self.fn_section_sizes[self.cur_section] % 2 != 0:
             self.fn_section_sizes[self.cur_section] += 1
 
-    def align4(self):
+    def align4(self) -> None:
         while self.fn_section_sizes[self.cur_section] % 4 != 0:
             self.fn_section_sizes[self.cur_section] += 1
 
-    def add_sized(self, size, line):
+    def add_sized(self, size: int, line: str) -> None:
         if self.cur_section in ['.text', '.late_rodata']:
             if size % 4 != 0:
                 self.fail("size must be a multiple of 4", line)
@@ -114,7 +115,7 @@ class GlobalAsmBlock:
                 self.fail(".text block without an initial glabel", line)
             self.fn_ins_inds.append((self.num_lines - 1, size // 4))
 
-    def process_line(self, line, output_enc):
+    def process_line(self, line: str, output_enc: str) -> None:
         self.num_lines += 1
         if line.endswith('\\'):
             self.glued_line += line[:-1]
@@ -219,7 +220,7 @@ class GlobalAsmBlock:
         else:
             self.asm_conts.append(real_line)
 
-    def finish(self, state):
+    def finish(self, state: object) -> Tuple[List[str], Function]:
         src = [''] * (self.num_lines + 1)
         late_rodata_dummy_bytes = []
         jtbl_rodata_size = 0
