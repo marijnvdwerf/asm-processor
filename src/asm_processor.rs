@@ -95,7 +95,7 @@ pub struct Args {
 }
 
 /// Run the asm-processor with the given arguments
-pub fn run(args: &Args) -> Result<Option<ProcessorOutput>> {
+pub fn run(args: &Args, outfile: Option<&mut std::io::BufWriter<File>>) -> Result<Option<ProcessorOutput>> {
     let opt = match (args.opt_o0, args.opt_o1, args.opt_o2, args.opt_g) {
         (true, _, _, _) => "O0",
         (_, true, _, _) => "O1",
@@ -146,7 +146,7 @@ pub fn run(args: &Args) -> Result<Option<ProcessorOutput>> {
         let functions = if args.post_process.is_some() {
             Vec::new()
         } else {
-            parse_source(&mut reader, &opts, &mut deps, None::<&mut std::io::BufWriter<File>>)?
+            parse_source(&mut reader, &opts, &mut deps, outfile)?
         };
         
         return Ok(Some(ProcessorOutput {
@@ -164,7 +164,7 @@ pub fn run(args: &Args) -> Result<Option<ProcessorOutput>> {
     let functions = {
         let file = File::open(&args.filename)?;
         let mut reader = BufReader::new(file);
-        parse_source(&mut reader, &opts, &mut deps, None::<&mut std::io::BufWriter<File>>)?
+        parse_source(&mut reader, &opts, &mut deps, outfile)?
     };
 
     if functions.is_empty() && !args.force {

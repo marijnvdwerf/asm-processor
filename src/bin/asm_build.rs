@@ -101,7 +101,9 @@ fn run_preprocessor(
     );
     let preprocessed_path = temp_dir.join(&preprocessed_filename);
 
-    // Create Args struct for first asm_processor run
+    let file = File::create(&preprocessed_path)?;
+    let mut writer = std::io::BufWriter::new(file);
+
     let args = Args {
         filename: config.in_file.clone(),
         post_process: None,
@@ -123,8 +125,8 @@ fn run_preprocessor(
         opt_g: config.asmproc_flags.contains(&"-g".to_string()),
     };
 
-    // Run first pass of asm_processor
-    let output = run(&args)?;
+    // Pass the buffered writer to run
+    let output = run(&args, Some(&mut writer))?;
 
     if config.keep_preprocessed {
         let keep_dir = PathBuf::from("./asm_processor_preprocessed");
@@ -211,7 +213,6 @@ fn write_deps_file(
 
 fn run_post_processor(
     config: &BuildConfig,
-    output: &ProcessorOutput,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Create Args struct for post-processing
     let args = Args {
@@ -235,7 +236,7 @@ fn run_post_processor(
         opt_g: config.asmproc_flags.contains(&"-g".to_string()),
     };
 
-    run(&args)?;
+    run(&args, None)?;
     Ok(())
 }
 
@@ -253,10 +254,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create preprocessed file
     let mut outfile = File::create(&preprocessed_path)?;
+    let mut writer = BufWriter::new(outfile);
+
     let args = Args {
         filename: PathBuf::from(&config.in_file),
         post_process: None,
-        assembler: None,
+        assembler: Some(config.assembler_args.join(" ")),
         asm_prelude: Some("prelude.inc".to_string()),
         input_enc: "latin1".to_string(),
         output_enc: "latin1".to_string(),
@@ -274,7 +277,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         opt_g: config.asmproc_flags.contains(&"-g".to_string()),
     };
 
-    if let Some(output) = run(&args)? {
+    if let Some(output) = run(&args, Some(&mut writer))? {
         // Run compiler
         run_compiler(&config, &preprocessed_path)?;
 
@@ -300,7 +303,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             opt_g: config.asmproc_flags.contains(&"-g".to_string()),
         };
 
-        run(&post_args)?;
+        run(&post_args, None)?;
     }
 
     Ok(())
