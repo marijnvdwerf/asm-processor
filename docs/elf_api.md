@@ -12,8 +12,7 @@ The main entry point for working with ELF files.
 pub struct ElfFile {
     pub data: Vec<u8>,     // Raw file data
     pub fmt: ElfFormat,    // Format information (endianness)
-    pub symtab: Section,   // Symbol table section
-    pub sections: Vec<Section>,
+    pub sections: Vec<ElfSection>,
 }
 
 // Methods
@@ -24,7 +23,7 @@ impl ElfFile {
 
     // Find section by name
     // Python: find_section(name)
-    pub fn find_section(&self, name: &str) -> Option<&Section>;
+    pub fn find_section(&self, name: &str) -> Option<&ElfSection>;
 
     // Remove .mdebug and .gptab sections
     // Python: drop_mdebug_gptab()
@@ -36,7 +35,7 @@ impl ElfFile {
         sh_type: u32, sh_flags: u32,
         sh_link: usize, sh_info: u32,
         sh_addralign: u32, sh_entsize: u32,
-        data: Vec<u8>) -> &mut Section;
+        data: Vec<u8>) -> &mut ElfSection;
 
     // Write ELF file to disk
     // Python: write(filename)
@@ -48,21 +47,21 @@ impl ElfFile {
 
     // Find symbol by name within a specific section
     // Python: symtab.find_symbol_in_section(name, section)
-    pub fn find_symbol_in_section(&self, name: &str, section: &Section) -> u32;
+    pub fn find_symbol_in_section(&self, name: &str, section: &ElfSection) -> u32;
 }
 ```
 
-### Section
+### ElfSection
 
 Represents an ELF section.
 
 ```rust
 // Rust
-pub struct Section {
+pub struct ElfSection {
     pub name: String,
     pub data: Vec<u8>,
     pub index: usize,
-    pub relocated_by: Vec<Section>,
+    pub relocated_by: Vec<ElfSection>,
     
     // Section header fields
     pub sh_type: u32,
@@ -74,7 +73,7 @@ pub struct Section {
 }
 
 // Methods
-impl Section {
+impl ElfSection {
     // Look up string in string table section
     // Python: lookup_str(offset)
     pub fn lookup_str(&self, offset: u32) -> Result<String, Error>;
@@ -98,7 +97,7 @@ impl Section {
 
     // Find symbol by name within this section
     // Python: find_symbol_in_section(name, section) 
-    pub fn find_symbol_in_section(&self, name: &str, section: &Section) -> u32;
+    pub fn find_symbol_in_section(&self, name: &str, section: &ElfSection) -> u32;
 
     // Get symbol entries
     // Python: symbol_entries property
@@ -129,7 +128,7 @@ impl Symbol {
     pub fn from_parts(fmt: ElfFormat,
         st_name: u32, st_value: u32, st_size: u32,
         st_info: u8, st_other: u8, st_shndx: u16,
-        strtab: &Section, name: String) -> Result<Self, Error>;
+        strtab: &ElfSection, name: String) -> Result<Self, Error>;
 
     // Convert symbol to binary format
     // Python: to_bin()

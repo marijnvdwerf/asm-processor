@@ -135,6 +135,16 @@ impl ElfFile {
         }
     }
 
+    pub fn find_symbol(&self, name: &str) -> Option<(usize, u32)> {
+        let symtab = &self.sections[self.symtab];
+        symtab.find_symbol(name)
+    }
+
+    pub fn find_symbol_in_section(&self, name: &str, section: &ElfSection) -> u32 {
+        let symtab = &self.sections[self.symtab];
+        symtab.find_symbol_in_section(name, section)
+    }
+
     pub fn write(&mut self, filename: &str) -> Result<(), Error> {
         let mut file = File::create(filename)?;
         let mut outidx: u32 = 0;
@@ -302,6 +312,34 @@ mod tests {
         
         // Clean up
         fs::remove_file(temp_file)?;
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_symbol() -> Result<(), Error> {
+        // Add test for symbol lookup functionality
+        let mut elf = create_test_elf()?;
+        
+        // Test finding existing symbol
+        let result = elf.find_symbol("test_symbol");
+        assert!(result.is_some());
+        
+        // Test finding non-existent symbol
+        let result = elf.find_symbol("nonexistent");
+        assert!(result.is_none());
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_symbol_in_section() -> Result<(), Error> {
+        let mut elf = create_test_elf()?;
+        
+        if let Some(section) = elf.find_section(".text") {
+            let offset = elf.find_symbol_in_section("test_symbol", section);
+            assert!(offset > 0);
+        }
         
         Ok(())
     }
