@@ -69,6 +69,21 @@ impl ElfFormat {
         }
         result
     }
+
+    pub fn unpack_tuple_u32(&self, data: &[u8]) -> (u32, u32) {
+        (
+            self.unpack_u32(&data[0..4]),
+            self.unpack_u32(&data[4..8])
+        )
+    }
+
+    pub fn unpack_tuple_u32_3(&self, data: &[u8]) -> (u32, u32, u32) {
+        (
+            self.unpack_u32(&data[0..4]),
+            self.unpack_u32(&data[4..8]),
+            self.unpack_u32(&data[8..12])
+        )
+    }
 }
 
 #[cfg(test)]
@@ -113,5 +128,29 @@ mod tests {
         assert_eq!(packed, vec![0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0]);
         let unpacked = fmt.unpack_multiple_u32(&packed);
         assert_eq!(unpacked, values);
+    }
+
+    #[test]
+    fn test_unpack_tuple_u32() {
+        let fmt = ElfFormat::new(true);
+        let mut data = Vec::new();
+        data.extend_from_slice(&fmt.pack_u32(0x12345678));
+        data.extend_from_slice(&fmt.pack_u32(0xabcdef01));
+        let (a, b) = fmt.unpack_tuple_u32(&data);
+        assert_eq!(a, 0x12345678);
+        assert_eq!(b, 0xabcdef01);
+    }
+
+    #[test]
+    fn test_unpack_tuple_u32_3() {
+        let fmt = ElfFormat::new(true);
+        let mut data = Vec::new();
+        data.extend_from_slice(&fmt.pack_u32(0x12345678));
+        data.extend_from_slice(&fmt.pack_u32(0xabcdef01));
+        data.extend_from_slice(&fmt.pack_u32(0x87654321));
+        let (a, b, c) = fmt.unpack_tuple_u32_3(&data);
+        assert_eq!(a, 0x12345678);
+        assert_eq!(b, 0xabcdef01);
+        assert_eq!(c, 0x87654321);
     }
 }
