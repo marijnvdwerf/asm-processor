@@ -237,9 +237,58 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 ```
 
+### Options Module
+
+The `options` module provides configuration settings for the ASM processor through the `Opts` struct.
+
+### Structure
+```rust
+pub struct Opts {
+    pub opt: String,             // Optimization level
+    pub framepointer: bool,      // Frame pointer usage
+    pub kpic: bool,             // Position Independent Code
+    pub enable_cutscene_data_float_encoding: bool,
+    pub mips1: bool,            // MIPS1 target
+    pub pascal: bool,           // Pascal calling convention
+    pub filename: PathBuf,      // Input filename
+    pub output_enc: String,     // Output encoding
+}
+```
+
+### Features
+- Default implementation with common settings
+- Builder pattern for custom configurations
+- Strong typing with PathBuf for filenames
+- Flexible encoding options
+
 ### Processor Module
 
 The `processor` module is responsible for parsing source files and processing assembly blocks. It serves as the main entry point for the ASM processor functionality.
+
+### Improvements
+- Implemented Clone for GlobalAsmBlock
+- Fixed ownership and borrowing issues
+- Improved line number tracking
+- Enhanced error handling
+- Resolved multiple borrow issues
+- Added proper path display handling
+
+### Module Organization
+```rust
+src/processor.rs
+├── parse_source<R, W>()
+    ├── Line processing
+    ├── ASM block handling
+    ├── File inclusion
+    ├── Source tracking
+    └── Output management
+```
+
+### Integration Points
+- Works with Options module for configuration
+- Uses GlobalAsmBlock for assembly processing
+- Integrates with Function for output
+- Handles file I/O with proper error management
 
 ### Key Components
 

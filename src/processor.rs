@@ -77,7 +77,7 @@ pub fn parse_source<R: BufRead, W: Write>(
 
     let mut global_asm: Option<GlobalAsmBlock> = None;
     let mut asm_functions = Vec::new();
-    let mut output_lines = vec![format!("#line 1 \"{}\"", opts.filename)];
+    let mut output_lines = vec![format!("#line 1 \"{}\"", opts.filename.display())];
     let mut is_cutscene_data = false;
     let mut is_early_include = false;
 
@@ -89,11 +89,12 @@ pub fn parse_source<R: BufRead, W: Write>(
 
         // Ensure one output line per source line
         output_lines.push(String::new());
+        let current_line_idx = output_lines.len() - 1;
 
         if let Some(ref mut asm_block) = global_asm {
             if trimmed_line.starts_with(')') {
-                let (src, func) = asm_block.finish(&mut state)?;
-                let start_index = output_lines.len() - src.len();
+                let (src, func) = asm_block.clone().finish(&mut state)?;
+                let start_index = current_line_idx - src.len() + 1;
                 for (i, line2) in src.into_iter().enumerate() {
                     output_lines[start_index + i] = line2;
                 }
@@ -137,12 +138,12 @@ pub fn parse_source<R: BufRead, W: Write>(
                         ext_global_asm.process_line(&line2, &opts.output_enc)?;
                     }
                     let (src, func) = ext_global_asm.finish(&mut state)?;
-                    output_lines[output_lines.len() - 1] = src.join("");
+                    output_lines[current_line_idx] = src.join("");
                     asm_functions.push(func);
                     out_dependencies.push(fname);
                 }
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                    output_lines[output_lines.len() - 1] = format!("#include \"GLOBAL_ASM:{}\"", fname);
+                    output_lines[current_line_idx] = format!("#include \"GLOBAL_ASM:{}\"", fname);
                 }
                 Err(e) => return Err(Error::Io(e)),
             }
@@ -167,8 +168,8 @@ pub fn parse_source<R: BufRead, W: Write>(
                 out_dependencies,
                 Some(&mut include_src),
             )?;
-            writeln!(include_src, "#line {} \"{}\"", line_no + 1, opts.filename)?;
-            output_lines[output_lines.len() - 1] = String::from_utf8(include_src)
+            writeln!(include_src, "#line {} \"{}\"", line_no + 1, opts.filename.display())?;
+            output_lines[current_line_idx] = String::from_utf8(include_src)
                 .map_err(|_| Error::InvalidInput("Invalid UTF-8 in included file".into()))?;
         } else {
             if opts.enable_cutscene_data_float_encoding {
@@ -178,13 +179,13 @@ pub fn parse_source<R: BufRead, W: Write>(
                     is_cutscene_data = false;
                 }
                 if is_cutscene_data {
-                    output_lines[output_lines.len() - 1] = FLOAT_RE.replace_all(&raw_line, repl_float_hex).into_owned();
+                    output_lines[current_line_idx] = FLOAT_RE.replace_all(&raw_line, repl_float_hex).into_owned();
                     line.clear();
                     line_no += 1;
                     continue;
                 }
             }
-            output_lines[output_lines.len() - 1] = raw_line;
+            output_lines[current_line_idx] = raw_line;
         }
 
         line.clear();

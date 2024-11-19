@@ -21,7 +21,7 @@ fn re_comment_replacer(cap: &regex::Captures) -> String {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GlobalAsmBlock {
     pub fn_desc: String,
     pub cur_section: String,
@@ -317,7 +317,7 @@ impl GlobalAsmBlock {
         Ok(())
     }
 
-    pub fn finish(self, state: &mut GlobalState) -> Result<Function> {
+    pub fn finish(mut self, _state: &mut GlobalState) -> Result<(Vec<String>, Function)> {
         if self.cur_section == ".text" && self.text_glabels.is_empty() {
             return Err(self.fail("no function labels found", None));
         }
@@ -361,14 +361,15 @@ impl GlobalAsmBlock {
             }
         }
 
-        Ok(Function {
+        let asm_conts = std::mem::take(&mut self.asm_conts);
+        Ok((asm_conts.clone(), Function {
             text_glabels: self.text_glabels,
-            asm_conts: self.asm_conts,
+            asm_conts,
             late_rodata_dummy_bytes,
             jtbl_rodata_size,
             late_rodata_asm_conts,
             fn_desc: self.fn_desc,
             data,
-        })
+        }))
     }
 }
