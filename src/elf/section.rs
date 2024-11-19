@@ -85,9 +85,9 @@ impl ElfSection {
             sh_addralign,
             sh_entsize,
             data,
+            index,
             symbols: Vec::new(),
             relocations: Vec::new(),
-            index,
             name: String::new(),
             relocated_by: Vec::new(),
         }
@@ -217,7 +217,9 @@ impl ElfSection {
     }
 
     pub fn late_init(&mut self, sections: &mut [ElfSection]) -> Result<(), Error> {
-        if self.sh_type == SHT_REL || self.sh_type == SHT_RELA {
+        if self.sh_type == SHT_SYMTAB {
+            self.init_symbols()?;
+        } else if self.is_rel() {
             let mut offset = 0;
             let entry_size = if self.sh_type == SHT_REL { 8 } else { 12 };
             while offset + entry_size <= self.data.len() {
@@ -226,7 +228,6 @@ impl ElfSection {
                 offset += entry_size;
             }
 
-            // Add this section to the list of sections that relocate the target section
             if self.sh_info as usize >= sections.len() {
                 return Err(Error::InvalidSection("Invalid sh_info value".into()));
             }
@@ -243,7 +244,7 @@ impl ElfSection {
         let mut new_data = self.data.clone();
         let shift_by = self.sh_offset.wrapping_sub(original_offset);
 
-        // First unpack the magic and version stamp as u16s
+        // First unpack the magic and version stamp
         let magic = self.fmt.unpack_u16(&self.data[0..2])?;
         let vstamp = self.fmt.unpack_u16(&self.data[2..4])?;
 
@@ -251,38 +252,25 @@ impl ElfSection {
             return Err(Error::InvalidFormat("Invalid magic value for .mdebug symbolic header".to_string()));
         }
 
-        // Now unpack the remaining 23 u32s
+        // Now unpack the remaining values
         let mut values = self.fmt.unpack_tuple_u32(&self.data[4..0x60], 23)?;
-        
-        // Update offsets if count is non-zero
-        // ilineMax, cbLine, cbLineOffset
-        if values[0] > 0 { values[2] = values[2].wrapping_add(shift_by); }
-        // idnMax, cbDnOffset
-        if values[3] > 0 { values[4] = values[4].wrapping_add(shift_by); }
-        // ipdMax, cbPdOffset
-        if values[5] > 0 { values[6] = values[6].wrapping_add(shift_by); }
-        // isymMax, cbSymOffset
-        if values[7] > 0 { values[8] = values[8].wrapping_add(shift_by); }
-        // ioptMax, cbOptOffset
-        if values[9] > 0 { values[10] = values[10].wrapping_add(shift_by); }
-        // iauxMax, cbAuxOffset
-        if values[11] > 0 { values[12] = values[12].wrapping_add(shift_by); }
-        // issMax, cbSsOffset
-        if values[13] > 0 { values[14] = values[14].wrapping_add(shift_by); }
-        // issExtMax, cbSsExtOffset
-        if values[15] > 0 { values[16] = values[16].wrapping_add(shift_by); }
-        // ifdMax, cbFdOffset
-        if values[17] > 0 { values[18] = values[18].wrapping_add(shift_by); }
-        // crfd, cbRfdOffset
-        if values[19] > 0 { values[20] = values[20].wrapping_add(shift_by); }
-        // iextMax, cbExtOffset
-        if values[21] > 0 { values[22] = values[22].wrapping_add(shift_by); }
 
-        // Pack magic and vstamp back
+        // Update offsets if count is non-zero (matching Python implementation)
+        if values[0] > 0 { values[2] = values[2].wrapping_add(shift_by); }  // ilineMax -> cbLineOffset
+        if values[3] > 0 { values[4] = values[4].wrapping_add(shift_by); }  // idnMax -> cbDnOffset
+        if values[5] > 0 { values[6] = values[6].wrapping_add(shift_by); }  // ipdMax -> cbPdOffset
+        if values[7] > 0 { values[8] = values[8].wrapping_add(shift_by); }  // isymMax -> cbSymOffset
+        if values[9] > 0 { values[10] = values[10].wrapping_add(shift_by); }  // ioptMax -> cbOptOffset
+        if values[11] > 0 { values[12] = values[12].wrapping_add(shift_by); }  // iauxMax -> cbAuxOffset
+        if values[13] > 0 { values[14] = values[14].wrapping_add(shift_by); }  // issMax -> cbSsOffset
+        if values[15] > 0 { values[16] = values[16].wrapping_add(shift_by); }  // issExtMax -> cbSsExtOffset
+        if values[17] > 0 { values[18] = values[18].wrapping_add(shift_by); }  // ifdMax -> cbFdOffset
+        if values[19] > 0 { values[20] = values[20].wrapping_add(shift_by); }  // crfd -> cbRfdOffset
+        if values[21] > 0 { values[22] = values[22].wrapping_add(shift_by); }  // iextMax -> cbExtOffset
+
+        // Pack everything back
         self.fmt.pack_u16(&mut new_data[0..2], magic)?;
         self.fmt.pack_u16(&mut new_data[2..4], vstamp)?;
-
-        // Pack the updated values back
         self.fmt.pack_tuple_u32(&mut new_data[4..0x60], &values)?;
 
         self.data = new_data;
@@ -319,6 +307,13 @@ impl ElfSection {
             offset += entry_size;
         }
         Ok(())
+    }
+
+    pub fn symbol_entries(&self) -> Result<&[Symbol], Error> {
+        if self.sh_type != SHT_SYMTAB {
+            return Err(Error::InvalidSection("Not a symbol table section".into()));
+        }
+        Ok(&self.symbols)
     }
 }
 
