@@ -1,12 +1,9 @@
-use std::{
-    env,
-    fs::{self, File},
-    io::{BufWriter, Write},
-    path::{Path, PathBuf},
-    process::Command,
-};
-
-use asm_processor::{run, parse_source, utils::options::Opts, ProcessorOutput, Args};
+use asm_processor::{run, ProcessorOutput, Args, Error as AsmError};
+use std::env;
+use std::fs::{self, File};
+use std::io::{self, BufWriter, Write};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use tempfile::Builder;
 use uuid::Uuid;
 
