@@ -90,58 +90,6 @@ fn parse_args() -> BuildConfig {
     }
 }
 
-fn run_preprocessor(
-    config: &BuildConfig,
-    temp_dir: &Path,
-) -> Result<(Option<ProcessorOutput>, PathBuf), Box<dyn std::error::Error>> {
-    let preprocessed_filename = format!(
-        "preprocessed_{}.{}",
-        Uuid::new_v4(),
-        config.in_file.extension().unwrap_or_default().to_string_lossy()
-    );
-    let preprocessed_path = temp_dir.join(&preprocessed_filename);
-
-    let file = File::create(&preprocessed_path)?;
-    let mut writer = std::io::BufWriter::new(file);
-
-    let args = Args {
-        filename: config.in_file.clone(),
-        post_process: None,
-        assembler: None,
-        asm_prelude: None,
-        input_enc: "latin1".to_string(),
-        output_enc: "latin1".to_string(),
-        drop_mdebug_gptab: false,
-        convert_statics: "local".to_string(),
-        force: false,
-        encode_cutscene_data_floats: false,
-        framepointer: config.asmproc_flags.contains(&"-framepointer".to_string()),
-        mips1: config.asmproc_flags.contains(&"-mips1".to_string()),
-        g3: config.asmproc_flags.contains(&"-g3".to_string()),
-        kpic: config.asmproc_flags.contains(&"-KPIC".to_string()),
-        opt_o0: config.asmproc_flags.contains(&"-O0".to_string()),
-        opt_o1: config.asmproc_flags.contains(&"-O1".to_string()),
-        opt_o2: config.asmproc_flags.contains(&"-O2".to_string()),
-        opt_g: config.asmproc_flags.contains(&"-g".to_string()),
-    };
-
-    // Pass the buffered writer to run
-    let output = run(&args, Some(&mut writer))?;
-
-    if config.keep_preprocessed {
-        let keep_dir = PathBuf::from("./asm_processor_preprocessed");
-        fs::create_dir_all(&keep_dir)?;
-        let keep_name = format!(
-            "{}_{}", 
-            config.in_file.file_stem().unwrap().to_string_lossy(),
-            preprocessed_filename
-        );
-        fs::copy(&preprocessed_path, keep_dir.join(keep_name))?;
-    }
-
-    Ok((output, preprocessed_path))
-}
-
 fn run_compiler(
     config: &BuildConfig,
     preprocessed_path: &Path,
@@ -183,60 +131,6 @@ fn run_compiler(
         ).into());
     }
 
-    Ok(())
-}
-
-fn write_deps_file(
-    config: &BuildConfig,
-    deps: &[String],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let deps_file = config.out_file.with_extension("asmproc.d");
-    
-    if !deps.is_empty() {
-        let mut file = File::create(deps_file)?;
-        writeln!(
-            file,
-            "{}: {}", 
-            config.out_file.display(),
-            deps.join(" \\\n    ")
-        )?;
-        
-        for dep in deps {
-            writeln!(file, "\n{}:", dep)?;
-        }
-    } else if deps_file.exists() {
-        fs::remove_file(deps_file)?;
-    }
-
-    Ok(())
-}
-
-fn run_post_processor(
-    config: &BuildConfig,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Create Args struct for post-processing
-    let args = Args {
-        filename: config.in_file.clone(),
-        post_process: Some(config.out_file.clone()),
-        assembler: Some(config.assembler_args.join(" ")),
-        asm_prelude: Some(DEFAULT_PRELUDE.to_string()),
-        input_enc: "latin1".to_string(),
-        output_enc: "latin1".to_string(),
-        drop_mdebug_gptab: false,
-        convert_statics: "local".to_string(),
-        force: false,
-        encode_cutscene_data_floats: false,
-        framepointer: config.asmproc_flags.contains(&"-framepointer".to_string()),
-        mips1: config.asmproc_flags.contains(&"-mips1".to_string()),
-        g3: config.asmproc_flags.contains(&"-g3".to_string()),
-        kpic: config.asmproc_flags.contains(&"-KPIC".to_string()),
-        opt_o0: config.asmproc_flags.contains(&"-O0".to_string()),
-        opt_o1: config.asmproc_flags.contains(&"-O1".to_string()),
-        opt_o2: config.asmproc_flags.contains(&"-O2".to_string()),
-        opt_g: config.asmproc_flags.contains(&"-g".to_string()),
-    };
-
-    run(&args, None)?;
     Ok(())
 }
 
