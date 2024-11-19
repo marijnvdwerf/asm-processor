@@ -119,7 +119,7 @@ impl ElfFile {
 
     pub fn drop_mdebug_gptab(&mut self) {
         while let Some(section) = self.sections.last() {
-            if section.sh_type != SHT_MIPS_REGINFO {
+            if section.sh_type != SHT_MIPS_DEBUG && section.sh_type != SHT_MIPS_GPTAB {
                 break;
             }
             self.sections.pop();

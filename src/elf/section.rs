@@ -101,6 +101,13 @@ impl ElfSection {
         let mut data = vec![0; 40];
         let fmt = ElfFormat::new(true);
         
+        // Update sh_size to match data length if needed
+        let size = if self.sh_type != SHT_NOBITS && !self.data.is_empty() {
+            self.data.len() as u32
+        } else {
+            self.sh_size
+        };
+        
         let mut tmp = [0; 4];
         
         // sh_name
@@ -124,7 +131,7 @@ impl ElfSection {
         data[16..20].copy_from_slice(&tmp);
         
         // sh_size
-        fmt.pack_u32(&mut tmp, self.sh_size).unwrap();
+        fmt.pack_u32(&mut tmp, size).unwrap();
         data[20..24].copy_from_slice(&tmp);
         
         // sh_link
@@ -167,33 +174,32 @@ impl ElfSection {
             return Err(Error::InvalidSection("Not a string table section".into()));
         }
         let ret = self.data.len() as u32;
-        self.data.extend_from_slice(string.as_bytes());
+        // Convert to latin1 bytes like Python
+        self.data.extend(string.chars().map(|c| c as u8));
         self.data.push(0);
         self.sh_size = self.data.len() as u32;  // Update sh_size to match data length
         Ok(ret)
     }
 
-    pub fn find_symbol(&self, name: &str, sections: &[ElfSection]) -> Result<u32, Error> {
+    pub fn find_symbol(&self, name: &str, sections: &[ElfSection]) -> Result<Option<(usize, u32)>, Error> {
         if self.sh_type != SHT_SYMTAB {
             return Err(Error::InvalidSection("Not a symbol table section".into()));
         }
-
         for symbol in &self.symbols {
             if symbol.name == name {
-                return Ok(symbol.st_value);
+                return Ok(Some((symbol.st_shndx as usize, symbol.st_value)));
             }
         }
-
-        Err(Error::SymbolNotFound(name.to_string()))
+        Ok(None)
     }
 
     pub fn find_symbol_in_section(&self, name: &str, section: &ElfSection) -> Result<u32, Error> {
-        self.find_symbol(name, &[section.clone()])
-            .and_then(|offset| if offset as usize == section.index {
-                Ok(offset)
-            } else {
-                Err(Error::InvalidSection(format!("Symbol {} not found in section", name)))
-            })
+        let pos = self.find_symbol(name, &[section.clone()])?
+            .ok_or_else(|| Error::InvalidSection("Symbol not found".into()))?;
+        if pos.0 != section.index {
+            return Err(Error::InvalidSection("Symbol not in specified section".into()));
+        }
+        Ok(pos.1)
     }
 
     pub fn local_symbols(&self) -> Result<&[Symbol], Error> {
@@ -351,20 +357,20 @@ impl Section for ElfSection {
             .position(|&b| b == 0)
             .ok_or_else(|| Error::InvalidSection("String not null-terminated".into()))?;
 
-        String::from_utf8(self.data[index..index + end].to_vec())
-            .map_err(|_| Error::InvalidSection("Invalid UTF-8 in string table".into()))
+        // Use latin1 encoding like Python
+        Ok(self.data[index..index + end].iter().map(|&b| b as char).collect())
     }
 
     fn add_str(&mut self, s: &str) -> Result<u32, Error> {
         if self.sh_type != SHT_STRTAB {
             return Err(Error::InvalidSection("Not a string table section".into()));
         }
-
-        let index = self.data.len();
-        self.data.extend_from_slice(s.as_bytes());
+        let ret = self.data.len() as u32;
+        // Convert to latin1 bytes like Python
+        self.data.extend(s.chars().map(|c| c as u8));
         self.data.push(0);
         self.sh_size = self.data.len() as u32;
-        Ok(index as u32)
+        Ok(ret)
     }
 }
 
@@ -522,7 +528,7 @@ mod tests {
         };
 
         let sections = vec![section.clone()];
-        assert_eq!(section.find_symbol("local1", &sections).unwrap(), 2);
+        assert_eq!(section.find_symbol("local1", &sections).unwrap(), Some((1, 2)));
     }
 
     #[test]
