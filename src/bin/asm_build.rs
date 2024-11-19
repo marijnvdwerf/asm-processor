@@ -115,6 +115,7 @@ fn run_preprocessor(
         false,
         &config.in_file,
         "latin1",
+        "latin1",
     ), &mut deps, Some(&mut writer))?;
 
     if config.keep_preprocessed {

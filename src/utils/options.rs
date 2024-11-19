@@ -17,6 +17,8 @@ pub struct Opts {
     pub pascal: bool,
     /// Input filename
     pub filename: PathBuf,
+    /// Input encoding
+    pub input_enc: String,
     /// Output encoding
     pub output_enc: String,
 }
@@ -31,7 +33,8 @@ impl Default for Opts {
             mips1: false,
             pascal: false,
             filename: PathBuf::from("input.c"),
-            output_enc: "utf-8".to_string(),
+            input_enc: "latin1".to_string(),
+            output_enc: "latin1".to_string(),
         }
     }
 }
@@ -46,6 +49,7 @@ impl Opts {
         mips1: bool,
         pascal: bool,
         filename: impl Into<PathBuf>,
+        input_enc: impl Into<String>,
         output_enc: impl Into<String>,
     ) -> Self {
         Self {
@@ -56,6 +60,7 @@ impl Opts {
             mips1,
             pascal,
             filename: filename.into(),
+            input_enc: input_enc.into(),
             output_enc: output_enc.into(),
         }
     }

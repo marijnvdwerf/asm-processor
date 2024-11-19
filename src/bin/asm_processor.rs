@@ -134,8 +134,9 @@ pub fn run(args: &Args) -> Result<Option<ProcessorOutput>> {
         args.kpic,
         args.encode_cutscene_data_floats,
         args.mips1,
-        false, // pascal
+        pascal,
         &args.filename,
+        &args.input_enc,
         &args.output_enc,
     );
 
