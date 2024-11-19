@@ -1,56 +1,52 @@
+use crate::utils::Error;
 use crate::elf::format::ElfFormat;
-use crate::elf::constants::SHT_REL;
+use crate::elf::constants::SHT_RELA;
 
 #[derive(Debug, Clone)]
 pub struct Relocation {
     pub r_offset: u32,
     pub r_info: u32,
     pub r_addend: Option<u32>,
-    pub sym_index: u32,
-    pub rel_type: u8,
-    fmt: ElfFormat,
-    sh_type: u32,
 }
 
 impl Relocation {
-    pub fn new(fmt: ElfFormat, data: &[u8], sh_type: u32) -> Self {
-        let (r_offset, r_info, r_addend) = if sh_type == SHT_REL {
-            let (offset, info) = fmt.unpack_tuple_u32(data);
-            (offset, info, None)
+    pub fn new(fmt: &ElfFormat, data: &[u8], sh_type: u32) -> Result<Self, Error> {
+        let (offset, info) = fmt.unpack_tuple_u32(data)?;
+
+        let r_addend = if sh_type == SHT_RELA {
+            if data.len() < 12 {
+                return Err(Error::InvalidRelocation("RELA entry too short".into()));
+            }
+            let (_, _, addend) = fmt.unpack_tuple_u32_3(data)?;
+            Some(addend)
         } else {
-            let (offset, info, addend) = fmt.unpack_tuple_u32_3(data);
-            (offset, info, Some(addend))
+            None
         };
 
-        let sym_index = r_info >> 8;
-        let rel_type = (r_info & 0xff) as u8;
-
-        Self {
-            r_offset,
-            r_info,
+        Ok(Self {
+            r_offset: offset,
+            r_info: info,
             r_addend,
-            sym_index,
-            rel_type,
-            fmt,
-            sh_type,
-        }
+        })
     }
 
-    pub fn to_bytes(&mut self) -> Vec<u8> {
-        self.r_info = (self.sym_index << 8) | (self.rel_type as u32);
-        
-        if self.sh_type == SHT_REL {
-            let mut result = Vec::with_capacity(8);
-            result.extend_from_slice(&self.fmt.pack_u32(self.r_offset));
-            result.extend_from_slice(&self.fmt.pack_u32(self.r_info));
-            result
-        } else {
-            let mut result = Vec::with_capacity(12);
-            result.extend_from_slice(&self.fmt.pack_u32(self.r_offset));
-            result.extend_from_slice(&self.fmt.pack_u32(self.r_info));
-            result.extend_from_slice(&self.fmt.pack_u32(self.r_addend.unwrap_or(0)));
-            result
-        }
+    pub fn sym(&self) -> u32 {
+        self.r_info >> 8
+    }
+
+    pub fn type_(&self) -> u8 {
+        (self.r_info & 0xff) as u8
+    }
+
+    pub fn pack(&self, fmt: &ElfFormat) -> Vec<u8> {
+        let mut result = fmt.pack_tuple_u32_10(
+            self.r_offset,
+            self.r_info,
+            self.r_addend.unwrap_or(0),
+            0, 0, 0, 0, 0, 0, 0
+        );
+        result.truncate(if self.r_addend.is_some() { 12 } else { 8 });
+        result
     }
 }
 
@@ -59,56 +55,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_rel_parse() {
-        let fmt = ElfFormat::new(true); // big-endian
-        let mut data = Vec::new();
-        data.extend_from_slice(&fmt.pack_u32(0x1000)); // r_offset
-        data.extend_from_slice(&fmt.pack_u32(0x0205)); // r_info (sym_index = 2, type = 5)
-
-        let rel = Relocation::new(fmt, &data, SHT_REL);
-        assert_eq!(rel.r_offset, 0x1000);
-        assert_eq!(rel.sym_index, 2);
-        assert_eq!(rel.rel_type, 5);
-        assert!(rel.r_addend.is_none());
-    }
-
-    #[test]
-    fn test_rela_parse() {
-        let fmt = ElfFormat::new(true); // big-endian
-        let mut data = Vec::new();
-        data.extend_from_slice(&fmt.pack_u32(0x2000)); // r_offset
-        data.extend_from_slice(&fmt.pack_u32(0x0408)); // r_info (sym_index = 4, type = 8)
-        data.extend_from_slice(&fmt.pack_u32(0x42)); // r_addend
-
-        let rel = Relocation::new(fmt, &data, SHT_REL + 1); // SHT_RELA
-        assert_eq!(rel.r_offset, 0x2000);
-        assert_eq!(rel.sym_index, 4);
-        assert_eq!(rel.rel_type, 8);
-        assert_eq!(rel.r_addend, Some(0x42));
-    }
-
-    #[test]
-    fn test_rel_roundtrip() {
+    fn test_relocation_parse() {
         let fmt = ElfFormat::new(true);
         let mut data = Vec::new();
-        data.extend_from_slice(&fmt.pack_u32(0x1000));
-        data.extend_from_slice(&fmt.pack_u32(0x0205));
+        data.extend_from_slice(&fmt.pack_u32(0x12345678)); // r_offset
+        data.extend_from_slice(&fmt.pack_u32(0x9ABCDEF0)); // r_info
 
-        let mut rel = Relocation::new(fmt, &data, SHT_REL);
-        let bytes = rel.to_bytes();
-        assert_eq!(data, bytes);
+        let reloc = Relocation::new(&fmt, &data, 2).unwrap();
+        assert_eq!(reloc.r_offset, 0x12345678);
+        assert_eq!(reloc.r_info, 0x9ABCDEF0);
+        assert_eq!(reloc.r_addend, None);
+        assert_eq!(reloc.sym(), 0x9ABCDE);
+        assert_eq!(reloc.type_(), 0xF0);
     }
 
     #[test]
-    fn test_rela_roundtrip() {
+    fn test_relocation_with_addend() {
         let fmt = ElfFormat::new(true);
         let mut data = Vec::new();
-        data.extend_from_slice(&fmt.pack_u32(0x2000));
-        data.extend_from_slice(&fmt.pack_u32(0x0408));
-        data.extend_from_slice(&fmt.pack_u32(0x42));
+        data.extend_from_slice(&fmt.pack_u32(0x12345678)); // r_offset
+        data.extend_from_slice(&fmt.pack_u32(0x9ABCDEF0)); // r_info
+        data.extend_from_slice(&fmt.pack_u32(0x11223344)); // r_addend
 
-        let mut rel = Relocation::new(fmt, &data, SHT_REL + 1);
-        let bytes = rel.to_bytes();
-        assert_eq!(data, bytes);
+        let reloc = Relocation::new(&fmt, &data, SHT_RELA).unwrap();
+        assert_eq!(reloc.r_offset, 0x12345678);
+        assert_eq!(reloc.r_info, 0x9ABCDEF0);
+        assert_eq!(reloc.r_addend, Some(0x11223344));
+    }
+
+    #[test]
+    fn test_relocation_pack() {
+        let fmt = ElfFormat::new(true);
+        let reloc = Relocation {
+            r_offset: 0x12345678,
+            r_info: 0x9ABCDEF0,
+            r_addend: Some(0x11223344),
+        };
+
+        let packed = reloc.pack(&fmt);
+        let unpacked = Relocation::new(&fmt, &packed, SHT_RELA).unwrap();
+
+        assert_eq!(unpacked.r_offset, reloc.r_offset);
+        assert_eq!(unpacked.r_info, reloc.r_info);
+        assert_eq!(unpacked.r_addend, reloc.r_addend);
     }
 }

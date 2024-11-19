@@ -1,6 +1,6 @@
-use asm_processor::{Error, Result};
+use asm_processor::Result;
 use clap::Parser;
-use std::path::PathBuf;
+use std::env;
 
 #[derive(Parser, Debug)]
 #[command(about = "Pre-process .c files and post-process .o files to enable embedding assembly into C")]

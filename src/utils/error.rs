@@ -17,6 +17,21 @@ pub enum Error {
 
     #[error("Encoding error: {0}")]
     EncodingError(String),
+
+    #[error("Invalid section: {0}")]
+    InvalidSection(String),
+
+    #[error("Symbol not found: {0}")]
+    SymbolNotFound(String),
+
+    #[error("Invalid symbol: {0}")]
+    InvalidSymbol(String),
+
+    #[error("Invalid relocation: {0}")]
+    InvalidRelocation(String),
+
+    #[error("Invalid format: {0}")]
+    InvalidFormat(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
