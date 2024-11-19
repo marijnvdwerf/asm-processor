@@ -1,10 +1,24 @@
-use std::io::{self, Write};
-use std::path::PathBuf;
-use clap::Parser;
-use asm_processor::run;
+use std::fs::File;
+use std::io::{self, BufReader, BufWriter, Write};
+use std::path::{Path, PathBuf};
+use clap::{Parser, ArgGroup};
+
+use asm_processor::{
+    Error,
+    Result,
+    Function,
+    parse_source,
+    utils::options::Opts,
+    objfile::fixup_objfile,
+};
 
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about = "Pre-process .c files and post-process .o files to enable embedding assembly into C.")]
+#[command(group(
+    ArgGroup::new("optimization")
+        .required(true)
+        .args(["opt_o0", "opt_o1", "opt_o2", "opt_g"]),
+))]
 struct Args {
     /// Path to .c code
     #[arg(value_name = "FILE")]
@@ -76,75 +90,110 @@ struct Args {
     opt_g: bool,
 }
 
-fn main() {
-    let args = Args::parse();
-    
-    // Convert Args to Vec<String> for library function
-    let mut argv = Vec::new();
-    argv.push(args.filename.to_string_lossy().into_owned());
-    
-    if let Some(post_process) = args.post_process {
-        argv.push("--post-process".into());
-        argv.push(post_process.to_string_lossy().into_owned());
-    }
-    
-    if let Some(assembler) = args.assembler {
-        argv.push("--assembler".into());
-        argv.push(assembler);
-    }
-    
-    if let Some(asm_prelude) = args.asm_prelude {
-        argv.push("--asm-prelude".into());
-        argv.push(asm_prelude.to_string_lossy().into_owned());
-    }
-    
-    argv.push("--input-enc".into());
-    argv.push(args.input_enc);
-    argv.push("--output-enc".into());
-    argv.push(args.output_enc);
-    
-    if args.drop_mdebug_gptab {
-        argv.push("--drop-mdebug-gptab".into());
-    }
-    
-    argv.push("--convert-statics".into());
-    argv.push(args.convert_statics);
-    
-    if args.force {
-        argv.push("--force".into());
-    }
-    
-    if args.encode_cutscene_data_floats {
-        argv.push("--encode-cutscene-data-floats".into());
-    }
-    
-    if args.framepointer {
-        argv.push("--framepointer".into());
-    }
-    
-    if args.mips1 {
-        argv.push("--mips1".into());
-    }
-    
-    if args.g3 {
-        argv.push("--g3".into());
-    }
-    
-    if args.kpic {
-        argv.push("--KPIC".into());
-    }
-    
-    if args.opt_o0 {
-        argv.push("--O0".into());
+/// Run the asm-processor with the given arguments
+///
+/// This is the main entry point for the library. It handles both pre-processing
+/// source files and post-processing object files.
+pub fn run_wrapped(args: Args, outfile: Option<&mut dyn Write>) -> Result<(Vec<Function>, Vec<String>)> {
+    let opt = if args.opt_o0 {
+        "O0"
     } else if args.opt_o1 {
-        argv.push("--O1".into());
+        "O1"
     } else if args.opt_o2 {
-        argv.push("--O2".into());
+        "O2"
     } else {
-        argv.push("-g".into());
+        "g"
+    }.to_string();
+
+    let pascal = args.filename
+        .extension()
+        .map(|ext| matches!(ext.to_str(), Some("p" | "pas" | "pp")))
+        .unwrap_or(false);
+
+    if args.g3 && opt != "O2" {
+        return Err(Error::InvalidInput("-g3 is only supported together with -O2".into()));
     }
-    
-    match run(&argv, Some(&mut io::stdout()), None) {
+
+    let opt = if args.g3 { "g3".to_string() } else { opt };
+
+    if args.mips1 && (!matches!(opt.as_str(), "O1" | "O2") || args.framepointer) {
+        return Err(Error::InvalidInput("-mips1 is only supported together with -O1 or -O2".into()));
+    }
+
+    if pascal && !matches!(opt.as_str(), "O1" | "O2" | "g3") {
+        return Err(Error::InvalidInput(
+            "Pascal is only supported together with -O1, -O2 or -O2 -g3".into()
+        ));
+    }
+
+    let opts = Opts::new(
+        &opt,
+        args.framepointer,
+        args.mips1,
+        args.kpic,
+        pascal,
+        &args.input_enc,
+        &args.output_enc,
+        args.encode_cutscene_data_floats,
+    );
+
+    if let Some(objfile) = args.post_process {
+        if args.assembler.is_none() {
+            return Err(Error::InvalidInput("must pass assembler command".into()));
+        }
+
+        let functions = {
+            let mut file = BufReader::new(File::open(&args.filename)?);
+            parse_source(&mut file, &opts, &mut Vec::new(), None)?
+        };
+
+        if functions.is_empty() && !args.force {
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        let asm_prelude = if let Some(prelude_path) = args.asm_prelude {
+            std::fs::read(prelude_path)?
+        } else {
+            Vec::new()
+        };
+
+        fixup_objfile(
+            &objfile,
+            &functions,
+            &asm_prelude,
+            args.assembler.as_ref().unwrap(),
+            &args.output_enc,
+            args.drop_mdebug_gptab,
+            &args.convert_statics,
+        )?;
+
+        Ok((functions, Vec::new()))
+    } else {
+        let mut deps = Vec::new();
+        let mut file = BufReader::new(File::open(&args.filename)?);
+        
+        let functions = if let Some(out) = outfile {
+            let mut writer = BufWriter::new(out);
+            parse_source(&mut file, &opts, &mut deps, Some(&mut writer))?
+        } else {
+            parse_source(&mut file, &opts, &mut deps, None)?
+        };
+
+        Ok((functions, deps))
+    }
+}
+
+/// Run the asm-processor with command line arguments
+///
+/// This is the main entry point for the command line interface.
+pub fn run(argv: &[String], outfile: Option<&mut dyn Write>, functions: Option<Vec<Function>>) -> Result<(Vec<Function>, Vec<String>)> {
+    let args = Args::try_parse_from(argv)
+        .map_err(|e| Error::InvalidInput(e.to_string()))?;
+    run_wrapped(args, outfile)
+}
+
+fn main() {
+    match run(&std::env::args().collect::<Vec<_>>(), Some(&mut io::stdout()), None) {
         Ok(_) => (),
         Err(e) => {
             eprintln!("Error: {}", e);
