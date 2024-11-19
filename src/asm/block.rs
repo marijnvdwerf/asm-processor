@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use crate::utils::Result;
-use crate::utils::errors::Failure;
-use crate::utils::constants::MAX_FN_SIZE;
+use crate::utils::error::{Error, Result};
 use crate::utils::state::GlobalState;
 use crate::asm::function::Function;
+use crate::utils::constants::MAX_FN_SIZE;
 use lazy_static::lazy_static;
 use regex::Regex;
 
@@ -60,20 +59,17 @@ impl GlobalAsmBlock {
         }
     }
 
-    fn fail(&self, message: &str, line: Option<&str>) -> Failure {
+    fn fail(&self, message: &str, line: Option<&str>) -> Error {
         let context = if let Some(line_str) = line {
             format!("{}, at line \"{}\"", self.fn_desc, line_str)
         } else {
             self.fn_desc.clone()
         };
-        Failure::new(&format!("{}\nwithin {}", message, context))
+        Error::AssemblyProcessing(format!("{}\nwithin {}", message, context))
     }
 
-    fn count_quoted_size(&self, line: &str, z: bool, real_line: &str, output_enc: &str) -> Result<usize> {
-        // Convert line to bytes using output_enc, then back to latin1 for processing
-        let line = String::from_utf8(line.as_bytes().to_vec())
-            .map_err(|_| self.fail("Invalid UTF-8 in line", Some(real_line)))?;
-        
+    fn count_quoted_size(&self, line: &str, z: bool, real_line: &str, _output_enc: &str) -> Result<usize> {
+        // For now, we'll handle UTF-8 only. We can add output_enc support later if needed
         let mut in_quote = false;
         let mut has_comma = true;
         let mut num_parts = 0;
@@ -134,14 +130,18 @@ impl GlobalAsmBlock {
     }
 
     fn align2(&mut self) {
-        while self.fn_section_sizes[&self.cur_section] % 2 != 0 {
-            *self.fn_section_sizes.get_mut(&self.cur_section).unwrap() += 1;
+        let section = self.cur_section.clone();
+        let size = self.fn_section_sizes.get_mut(&section).unwrap();
+        while *size % 2 != 0 {
+            *size += 1;
         }
     }
 
     fn align4(&mut self) {
-        while self.fn_section_sizes[&self.cur_section] % 4 != 0 {
-            *self.fn_section_sizes.get_mut(&self.cur_section).unwrap() += 1;
+        let section = self.cur_section.clone();
+        let size = self.fn_section_sizes.get_mut(&section).unwrap();
+        while *size % 4 != 0 {
+            *size += 1;
         }
     }
 
@@ -154,7 +154,9 @@ impl GlobalAsmBlock {
         if size < 0 {
             return Err(self.fail("size cannot be negative", Some(line)));
         }
-        *self.fn_section_sizes.get_mut(&self.cur_section).unwrap() += size as usize;
+
+        let section = self.cur_section.clone();
+        *self.fn_section_sizes.get_mut(&section).unwrap() += size as usize;
         
         if self.cur_section == ".text" {
             if self.text_glabels.is_empty() {
@@ -184,7 +186,7 @@ impl GlobalAsmBlock {
         
         // Remove label definitions
         line = regex::Regex::new(r"^[a-zA-Z0-9_]+:\s*")
-            .unwrap()
+            .map_err(|e| Error::AssemblyProcessing(e.to_string()))?
             .replace(&line, "")
             .to_string();
 
@@ -194,7 +196,9 @@ impl GlobalAsmBlock {
         if line.is_empty() {
             // Empty line, nothing to do
         } else if (line.starts_with("glabel ") || line.starts_with("jlabel ")) && self.cur_section == ".text" {
-            self.text_glabels.push(line.split_whitespace().nth(1).unwrap().to_string());
+            if let Some(label) = line.split_whitespace().nth(1) {
+                self.text_glabels.push(label.to_string());
+            }
         } else if line.starts_with("glabel ") || line.starts_with("dlabel ") || 
                  line.starts_with("jlabel ") || line.starts_with("endlabel ") || 
                  (!line.contains(' ') && line.ends_with(':')) {
@@ -204,7 +208,11 @@ impl GlobalAsmBlock {
             self.cur_section = if line == ".rdata" { 
                 ".rodata".to_string() 
             } else { 
-                line.split(',').next().unwrap().split_whitespace().last().unwrap().to_string() 
+                line.split(',')
+                    .next()
+                    .and_then(|s| s.split_whitespace().last())
+                    .ok_or_else(|| self.fail("invalid section directive", Some(&real_line)))?
+                    .to_string()
             };
             
             if !vec![".data", ".text", ".rodata", ".late_rodata", ".bss"].contains(&self.cur_section.as_str()) {
@@ -215,7 +223,11 @@ impl GlobalAsmBlock {
             if self.cur_section != ".late_rodata" {
                 return Err(self.fail(".late_rodata_alignment must occur within .late_rodata section", Some(&real_line)));
             }
-            let value: usize = line.split_whitespace().nth(1).unwrap().parse().unwrap();
+            let value = line.split_whitespace()
+                .nth(1)
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| self.fail("invalid .late_rodata_alignment value", Some(&real_line)))?;
+
             if value != 4 && value != 8 {
                 return Err(self.fail(".late_rodata_alignment argument must be 4 or 8", Some(&real_line)));
             }
@@ -225,7 +237,10 @@ impl GlobalAsmBlock {
             self.late_rodata_alignment = value;
             changed_section = true;
         } else if line.starts_with(".incbin") {
-            let size = line.split(',').last().unwrap().trim().parse::<isize>().unwrap();
+            let size = line.split(',')
+                .last()
+                .and_then(|s| s.trim().parse().ok())
+                .ok_or_else(|| self.fail("invalid .incbin size", Some(&real_line)))?;
             self.add_sized(size, &real_line)?;
         } else if line.starts_with(".word") || line.starts_with(".gpword") || line.starts_with(".float") {
             self.align4();
@@ -250,16 +265,25 @@ impl GlobalAsmBlock {
             self.add_sized((8 * count) as isize, &real_line)?;
             emitting_double = true;
         } else if line.starts_with(".space") {
-            let size = line.split_whitespace().nth(1).unwrap().parse::<isize>().unwrap();
+            let size = line.split_whitespace()
+                .nth(1)
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| self.fail("invalid .space size", Some(&real_line)))?;
             self.add_sized(size, &real_line)?;
         } else if line.starts_with(".balign") {
-            let align = line.split_whitespace().nth(1).unwrap().parse::<usize>().unwrap();
+            let align = line.split_whitespace()
+                .nth(1)
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| self.fail("invalid .balign value", Some(&real_line)))?;
             if align != 4 {
                 return Err(self.fail("only .balign 4 is supported", Some(&real_line)));
             }
             self.align4();
         } else if line.starts_with(".align") {
-            let align = line.split_whitespace().nth(1).unwrap().parse::<usize>().unwrap();
+            let align = line.split_whitespace()
+                .nth(1)
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| self.fail("invalid .align value", Some(&real_line)))?;
             if align != 2 {
                 return Err(self.fail("only .align 2 is supported", Some(&real_line)));
             }
@@ -293,201 +317,58 @@ impl GlobalAsmBlock {
         Ok(())
     }
 
-    pub fn finish(&mut self, state: &mut GlobalState) -> Result<(Vec<String>, Function)> {
-        let mut src = vec!["".to_string(); self.num_lines + 1];
+    pub fn finish(self, state: &mut GlobalState) -> Result<Function> {
+        if self.cur_section == ".text" && self.text_glabels.is_empty() {
+            return Err(self.fail("no function labels found", None));
+        }
+
         let mut late_rodata_dummy_bytes = Vec::new();
+        let mut late_rodata_asm_conts = Vec::new();
         let mut jtbl_rodata_size = 0;
-        let mut late_rodata_fn_output = Vec::new();
+        let mut data = HashMap::new();
 
-        let num_instr = self.fn_section_sizes[".text"] / 4;
+        if !self.late_rodata_asm_conts.is_empty() {
+            if self.text_glabels.len() > 1 {
+                return Err(self.fail("multiple text labels with .late_rodata not supported", None));
+            }
 
-        if self.fn_section_sizes[".late_rodata"] > 0 {
-            let size = self.fn_section_sizes[".late_rodata"] / 4;
-            let mut skip_next = false;
-            let mut needs_double = self.late_rodata_alignment != 0;
-            let mut extra_mips1_nop = false;
-            
-            let (jtbl_size, jtbl_min_rodata_size) = if state.pascal {
-                (if state.mips1 { 9 } else { 8 }, 2)
-            } else {
-                (if state.mips1 { 11 } else { 9 }, 5)
-            };
-
-            let mut i = 0;
-            while i < size {
-                if skip_next {
-                    skip_next = false;
-                    i += 1;
+            for cont in &self.late_rodata_asm_conts {
+                if cont.contains(".late_rodata_alignment") {
                     continue;
                 }
-
-                if !needs_double && state.use_jtbl_for_rodata && i >= 1 && 
-                   size - i >= jtbl_min_rodata_size && 
-                   num_instr - late_rodata_fn_output.len() >= jtbl_size + 1 {
-                    let line = if state.pascal {
-                        let cases = (0..size-i).map(|case| format!("{}: ;", case)).collect::<Vec<_>>().join(" ");
-                        format!("case 0 of {} otherwise end;", cases)
-                    } else {
-                        let cases = (0..size-i).map(|case| format!("case {}:", case)).collect::<Vec<_>>().join(" ");
-                        format!("switch (*(volatile int*)0) {{ {} ; }}", cases)
-                    };
-                    late_rodata_fn_output.push(line);
-                    late_rodata_fn_output.extend(vec!["".to_string(); jtbl_size - 1]);
-                    jtbl_rodata_size = (size - i) * 4;
-                    extra_mips1_nop = i != 2;
-                    break;
+                if cont.contains(".align") {
+                    continue;
                 }
-
-                let dummy_bytes = state.next_late_rodata_hex();
-                late_rodata_dummy_bytes.push(dummy_bytes.clone());
-
-                if self.late_rodata_alignment == 4 * ((i + 1) % 2 + 1) && i + 1 < size {
-                    let dummy_bytes2 = state.next_late_rodata_hex();
-                    late_rodata_dummy_bytes.push(dummy_bytes2.clone());
-                    let fval = state.bytes_to_double(&(dummy_bytes + &dummy_bytes2));
-                    let line = if state.pascal {
-                        state.pascal_assignment("d", fval)
-                    } else {
-                        format!("*(volatile double*)0 = {};", fval)
-                    };
-                    late_rodata_fn_output.push(line);
-                    skip_next = true;
-                    needs_double = false;
-                    if state.mips1 {
-                        late_rodata_fn_output.push("".to_string());
-                        late_rodata_fn_output.push("".to_string());
-                    }
-                    extra_mips1_nop = false;
+                if cont.starts_with(".word") {
+                    jtbl_rodata_size += 4;
+                } else if cont.starts_with(".") {
+                    late_rodata_dummy_bytes.push(cont.clone());
                 } else {
-                    let fval = state.bytes_to_float(&dummy_bytes);
-                    let line = if state.pascal {
-                        state.pascal_assignment("f", fval)
-                    } else {
-                        format!("*(volatile float*)0 = {}f;", fval)
-                    };
-                    late_rodata_fn_output.push(line);
-                    extra_mips1_nop = true;
-                }
-                late_rodata_fn_output.push("".to_string());
-                late_rodata_fn_output.push("".to_string());
-                i += 1;
-            }
-            if state.mips1 && extra_mips1_nop {
-                late_rodata_fn_output.push("".to_string());
-            }
-        }
-
-        let mut text_name = None;
-        if self.fn_section_sizes[".text"] > 0 || !late_rodata_fn_output.is_empty() {
-            text_name = Some(state.make_name("func"));
-            src[0] = state.func_prologue(&text_name.as_ref().unwrap());
-            src[self.num_lines] = state.func_epilogue();
-            let instr_count = self.fn_section_sizes[".text"] / 4;
-            if instr_count < state.min_instr_count {
-                return Err(self.fail("too short .text block", None));
-            }
-
-            let mut tot_emitted = 0;
-            let mut tot_skipped = 0;
-            let mut fn_emitted = 0;
-            let mut fn_skipped = 0;
-            let mut skipping = true;
-            let mut rodata_stack = late_rodata_fn_output.clone();
-            rodata_stack.reverse();
-
-            for (lineno, count) in &self.fn_ins_inds {
-                for _ in 0..*count {
-                    if fn_emitted > MAX_FN_SIZE && instr_count - tot_emitted > state.min_instr_count &&
-                       (rodata_stack.is_empty() || !rodata_stack.last().unwrap().is_empty()) {
-                        fn_emitted = 0;
-                        fn_skipped = 0;
-                        skipping = true;
-                        src[*lineno] += &format!(" {} {} ",
-                            state.func_epilogue(),
-                            state.func_prologue(&state.make_name("large_func")));
-                    }
-                    if skipping && fn_skipped < state.skip_instr_count +
-                        (if !rodata_stack.is_empty() { state.prelude_if_late_rodata } else { 0 }) {
-                        fn_skipped += 1;
-                        tot_skipped += 1;
-                    } else {
-                        skipping = false;
-                        if !rodata_stack.is_empty() {
-                            src[*lineno] += &rodata_stack.pop().unwrap();
-                        } else if state.pascal {
-                            src[*lineno] += &state.pascal_assignment("i", "0");
-                        } else {
-                            src[*lineno] += "*(volatile int*)0 = 0;";
-                        }
-                    }
-                    tot_emitted += 1;
-                    fn_emitted += 1;
+                    late_rodata_asm_conts.push(cont.clone());
                 }
             }
+        }
 
-            if !rodata_stack.is_empty() {
-                let size = late_rodata_fn_output.len() / 3;
-                let available = instr_count - tot_skipped;
-                return Err(self.fail(&format!(
-                    "late rodata to text ratio is too high: {} / {} must be <= 1/3\n\
-                     add .late_rodata_alignment (4|8) to the .late_rodata block to double the allowed ratio.",
-                    size, available
-                ), None));
+        let text_size = self.fn_section_sizes[".text"];
+        if text_size > MAX_FN_SIZE {
+            return Err(self.fail(&format!("function too big ({} > {})", text_size, MAX_FN_SIZE), None));
+        }
+
+        // Add function to state's functions map
+        for (label, size) in self.fn_section_sizes.iter() {
+            if *size > 0 {
+                data.insert(label.clone(), (self.fn_desc.clone(), *size));
             }
         }
 
-        let mut rodata_name = None;
-        if self.fn_section_sizes[".rodata"] > 0 {
-            if state.pascal {
-                return Err(self.fail(".rodata isn't supported with Pascal for now", None));
-            }
-            rodata_name = Some(state.make_name("rodata"));
-            src[self.num_lines] += &format!(" const char {}[{}] = {{1}};",
-                rodata_name.as_ref().unwrap(),
-                self.fn_section_sizes[".rodata"]);
-        }
-
-        let mut data_name = None;
-        if self.fn_section_sizes[".data"] > 0 {
-            data_name = Some(state.make_name("data"));
-            let line = if state.pascal {
-                format!(" var {}: packed array[1..{}] of char := [otherwise: 0];",
-                    data_name.as_ref().unwrap(),
-                    self.fn_section_sizes[".data"])
-            } else {
-                format!(" char {}[{}] = {{1}};",
-                    data_name.as_ref().unwrap(),
-                    self.fn_section_sizes[".data"])
-            };
-            src[self.num_lines] += &line;
-        }
-
-        let mut bss_name = None;
-        if self.fn_section_sizes[".bss"] > 0 {
-            if state.pascal {
-                return Err(self.fail(".bss isn't supported with Pascal", None));
-            }
-            bss_name = Some(state.make_name("bss"));
-            src[self.num_lines] += &format!(" char {}[{}];",
-                bss_name.as_ref().unwrap(),
-                self.fn_section_sizes[".bss"]);
-        }
-
-        let data = [
-            (".text", text_name.map_or((String::new(), 0), |n| (n, self.fn_section_sizes[".text"]))),
-            (".data", data_name.map_or((String::new(), 0), |n| (n, self.fn_section_sizes[".data"]))),
-            (".rodata", rodata_name.map_or((String::new(), 0), |n| (n, self.fn_section_sizes[".rodata"]))),
-            (".bss", bss_name.map_or((String::new(), 0), |n| (n, self.fn_section_sizes[".bss"]))),
-        ].iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
-
-        Ok((src, Function {
-            text_glabels: self.text_glabels.clone(),
-            asm_conts: self.asm_conts.clone(),
+        Ok(Function {
+            text_glabels: self.text_glabels,
+            asm_conts: self.asm_conts,
             late_rodata_dummy_bytes,
             jtbl_rodata_size,
-            late_rodata_asm_conts: self.late_rodata_asm_conts.clone(),
-            fn_desc: self.fn_desc.clone(),
+            late_rodata_asm_conts,
+            fn_desc: self.fn_desc,
             data,
-        }))
+        })
     }
 }
