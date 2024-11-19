@@ -31,11 +31,9 @@ impl ElfFile {
 
     // Add new section
     // Python: add_section(name, sh_type, sh_flags, sh_link, sh_info, sh_addralign, sh_entsize, data)
-    pub fn add_section(&mut self, name: &str, 
-        sh_type: u32, sh_flags: u32,
-        sh_link: usize, sh_info: u32,
-        sh_addralign: u32, sh_entsize: u32,
-        data: Vec<u8>) -> &mut ElfSection;
+    pub fn add_section(&mut self, name: &str, sh_type: u32, sh_flags: u32, 
+                      sh_link: u32, sh_info: u32, sh_addralign: u32, 
+                      sh_entsize: u32, data: Vec<u8>) -> Result<usize, Error>;
 
     // Write ELF file to disk
     // Python: write(filename)

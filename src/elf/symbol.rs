@@ -1,6 +1,7 @@
 use crate::utils::Error;
 use crate::elf::format::ElfFormat;
 use crate::elf::constants::*;
+use crate::elf::section::Section;
 
 #[derive(Debug, Clone, Default)]
 pub struct Symbol {
@@ -11,10 +12,12 @@ pub struct Symbol {
     pub st_other: u8,
     pub st_shndx: u16,
     pub name: String,
+    pub visibility: u8,
+    fmt: ElfFormat,
 }
 
 impl Symbol {
-    pub fn new(fmt: &ElfFormat, data: &[u8]) -> Result<Self, Error> {
+    pub fn new(fmt: &ElfFormat, data: &[u8], strtab: &Section) -> Result<Self, Error> {
         if data.len() < 16 {
             return Err(Error::InvalidFormat("Symbol data too short".into()));
         }
@@ -30,6 +33,9 @@ impl Symbol {
             return Err(Error::InvalidFormat("SHN_XINDEX not supported".into()));
         }
 
+        let name = strtab.lookup_str(st_name)?;
+        let visibility = st_other & 3;
+
         Ok(Self {
             st_name,
             st_value,
@@ -37,8 +43,38 @@ impl Symbol {
             st_info,
             st_other,
             st_shndx,
-            name: String::new(),
+            name,
+            visibility,
+            fmt: fmt.clone(),
         })
+    }
+
+    pub fn from_parts(
+        fmt: ElfFormat,
+        st_name: u32,
+        st_value: u32,
+        st_size: u32,
+        st_info: u8,
+        st_other: u8,
+        st_shndx: u16,
+        strtab: &Section,
+        name: String,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            st_name,
+            st_value,
+            st_size,
+            st_info,
+            st_other,
+            st_shndx,
+            name,
+            visibility: st_other & 3,
+            fmt,
+        })
+    }
+
+    pub fn to_bin(&self) -> Result<Vec<u8>, Error> {
+        self.to_bytes(&self.fmt)
     }
 
     pub fn bind(&self) -> u8 {
@@ -83,6 +119,8 @@ mod tests {
             st_other: 0,
             st_shndx: 0,
             name: String::new(),
+            visibility: 0,
+            fmt: ElfFormat::new(true),
         };
 
         assert_eq!(symbol.bind(), 2);
@@ -105,10 +143,12 @@ mod tests {
             st_other: 0x45,
             st_shndx: 0x6789,
             name: String::new(),
+            visibility: 0,
+            fmt: fmt.clone(),
         };
 
         let bytes = original.to_bytes(&fmt).unwrap();
-        let symbol = Symbol::new(&fmt, &bytes).unwrap();
+        let symbol = Symbol::new(&fmt, &bytes, &Section::new(&fmt, &[])).unwrap();
         assert_eq!(symbol.st_name, original.st_name);
         assert_eq!(symbol.st_value, original.st_value);
         assert_eq!(symbol.st_size, original.st_size);
