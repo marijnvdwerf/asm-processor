@@ -1,15 +1,15 @@
-use std::fs::File;
-use std::io::{self, BufReader};
 use std::path::PathBuf;
+use std::io::BufReader;
+use std::fs::File;
 use clap::{Parser, ArgGroup};
 
 use asm_processor::{
-    Error,
-    Result,
     asm::Function,
     parse_source,
+    fixup_objfile,
     utils::options::Opts,
-    objfile::fixup_objfile,
+    Error,
+    Result,
 };
 
 #[derive(Parser)]
@@ -144,7 +144,11 @@ pub fn run(args: &Args) -> Result<Option<ProcessorOutput>> {
         let mut deps = Vec::new();
         let file = File::open(&args.filename)?;
         let mut reader = BufReader::new(file);
-        let functions = parse_source(&mut reader, &opts, &mut deps, Some(&mut io::stdout()))?;
+        let functions = if args.post_process.is_some() {
+            Vec::new()
+        } else {
+            parse_source(&mut reader, &opts, &mut deps, None::<&mut std::io::BufWriter<File>>)?
+        };
         
         return Ok(Some(ProcessorOutput {
             functions,
@@ -161,7 +165,7 @@ pub fn run(args: &Args) -> Result<Option<ProcessorOutput>> {
     let functions = {
         let file = File::open(&args.filename)?;
         let mut reader = BufReader::new(file);
-        parse_source(&mut reader, &opts, &mut deps, None)?
+        parse_source(&mut reader, &opts, &mut deps, None::<&mut std::io::BufWriter<File>>)?
     };
 
     if functions.is_empty() && !args.force {
@@ -187,10 +191,11 @@ pub fn run(args: &Args) -> Result<Option<ProcessorOutput>> {
     Ok(None)
 }
 
-fn main() {
+fn main() -> Result<()> {
     let args = Args::parse();
     if let Err(e) = run(&args) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
+    Ok(())
 }

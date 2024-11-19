@@ -370,6 +370,7 @@ impl GlobalAsmBlock {
             late_rodata_asm_conts,
             fn_desc: self.fn_desc,
             data,
+            late_rodata: None,
         }))
     }
 }

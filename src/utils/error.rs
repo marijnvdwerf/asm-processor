@@ -35,3 +35,15 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<crate::objfile::ObjFileError> for Error {
+    fn from(err: crate::objfile::ObjFileError) -> Self {
+        match err {
+            crate::objfile::ObjFileError::Io(e) => Error::Io(e),
+            crate::objfile::ObjFileError::ElfError(e) => Error::ElfProcessing(e),
+            crate::objfile::ObjFileError::SectionError(e) => Error::InvalidSection(e),
+            crate::objfile::ObjFileError::SymbolError(e) => Error::InvalidSymbol(e),
+            crate::objfile::ObjFileError::RelocationError(e) => Error::InvalidRelocation(e),
+        }
+    }
+}

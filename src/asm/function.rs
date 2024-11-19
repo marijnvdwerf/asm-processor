@@ -9,4 +9,5 @@ pub struct Function {
     pub late_rodata_asm_conts: Vec<String>,
     pub fn_desc: String,
     pub data: HashMap<String, (String, usize)>,
+    pub late_rodata: Option<(String, String)>,
 }

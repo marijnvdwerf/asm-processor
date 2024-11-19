@@ -4,8 +4,6 @@ use crate::elf::symbol::Symbol;
 use crate::elf::relocation::Relocation;
 use crate::elf::constants::*;
 
-const SHF_LINK_ORDER: u32 = 0x80;
-
 pub trait Section {
     fn lookup_str(&self, index: usize) -> Result<String, Error>;
     fn add_str(&mut self, s: &str) -> Result<u32, Error>;
@@ -181,7 +179,7 @@ impl ElfSection {
         Ok(ret)
     }
 
-    pub fn find_symbol(&self, name: &str, sections: &[ElfSection]) -> Result<Option<(usize, u32)>, Error> {
+    pub fn find_symbol(&self, name: &str, _sections: &[ElfSection]) -> Result<Option<(usize, u32)>, Error> {
         if self.sh_type != SHT_SYMTAB {
             return Err(Error::InvalidSection("Not a symbol table section".into()));
         }

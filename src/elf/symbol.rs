@@ -1,6 +1,5 @@
 use crate::utils::Error;
 use crate::elf::format::ElfFormat;
-use crate::elf::constants::*;
 use crate::elf::section::Section;
 
 #[derive(Debug, Clone, Default)]
@@ -52,7 +51,7 @@ impl Symbol {
         st_info: u8,
         st_other: u8,
         st_shndx: u16,
-        strtab: &T,
+        _strtab: &T,
         name: String,
     ) -> Result<Self, Error> {
         Ok(Self {
