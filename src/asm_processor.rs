@@ -95,7 +95,7 @@ pub struct Args {
 }
 
 /// Run the asm-processor with the given arguments
-pub fn run(args: &Args, outfile: Option<&mut std::io::BufWriter<File>>) -> Result<Option<ProcessorOutput>> {
+pub fn run<W: std::io::Write>(args: &Args, outfile: Option<&mut W>) -> Result<Option<ProcessorOutput>> {
     let opt = match (args.opt_o0, args.opt_o1, args.opt_o2, args.opt_g) {
         (true, _, _, _) => "O0",
         (_, true, _, _) => "O1",

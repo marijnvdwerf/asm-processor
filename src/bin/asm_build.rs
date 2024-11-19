@@ -197,7 +197,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             opt_g: config.asmproc_flags.contains(&"-g".to_string()),
         };
 
-        run(&post_args, None)?;
+        run::<std::io::BufWriter<File>>(&post_args, None)?;
     }
 
     Ok(())
