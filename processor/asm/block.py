@@ -3,6 +3,7 @@ import re
 from .function import Function
 from ..utils.errors import Failure
 from ..utils.constants import MAX_FN_SIZE
+from ..utils.state import GlobalState
 import struct
 
 
@@ -24,11 +25,11 @@ class GlobalAsmBlock:
     def __init__(self, fn_desc: str) -> None:
         self.fn_desc = fn_desc
         self.cur_section = '.text'
-        self.asm_conts = []
-        self.late_rodata_asm_conts = []
+        self.asm_conts: List[str] = []
+        self.late_rodata_asm_conts: List[str] = []
         self.late_rodata_alignment = 0
         self.late_rodata_alignment_from_content = False
-        self.text_glabels = []
+        self.text_glabels: List[str] = []
         self.fn_section_sizes = {
             '.text': 0,
             '.data': 0,
@@ -36,7 +37,7 @@ class GlobalAsmBlock:
             '.rodata': 0,
             '.late_rodata': 0,
         }
-        self.fn_ins_inds = []
+        self.fn_ins_inds: List[Tuple[int, int]] = []
         self.glued_line = ''
         self.num_lines = 0
 
@@ -220,11 +221,11 @@ class GlobalAsmBlock:
         else:
             self.asm_conts.append(real_line)
 
-    def finish(self, state: object) -> Tuple[List[str], Function]:
+    def finish(self, state: GlobalState) -> Tuple[List[str], Function]:
         src = [''] * (self.num_lines + 1)
         late_rodata_dummy_bytes = []
         jtbl_rodata_size = 0
-        late_rodata_fn_output = []
+        late_rodata_fn_output: List[str] = []
 
         num_instr = self.fn_section_sizes['.text'] // 4
 
@@ -317,7 +318,7 @@ class GlobalAsmBlock:
             fn_skipped = 0
             skipping = True
             rodata_stack = late_rodata_fn_output[::-1]
-            for (line, count) in self.fn_ins_inds:
+            for (lineno, count) in self.fn_ins_inds:
                 for _ in range(count):
                     if (fn_emitted > MAX_FN_SIZE and instr_count - tot_emitted > state.min_instr_count and
                             (not rodata_stack or rodata_stack[-1])):
@@ -329,7 +330,7 @@ class GlobalAsmBlock:
                         fn_emitted = 0
                         fn_skipped = 0
                         skipping = True
-                        src[line] += (' ' + state.func_epilogue() + ' ' +
+                        src[lineno] += (' ' + state.func_epilogue() + ' ' +
                             state.func_prologue(state.make_name('large_func')) + ' ')
                     if (
                         skipping and
@@ -341,11 +342,11 @@ class GlobalAsmBlock:
                     else:
                         skipping = False
                         if rodata_stack:
-                            src[line] += rodata_stack.pop()
+                            src[lineno] += rodata_stack.pop()
                         elif state.pascal:
-                            src[line] += state.pascal_assignment('i', '0')
+                            src[lineno] += state.pascal_assignment('i', '0')
                         else:
-                            src[line] += '*(volatile int*)0 = 0;'
+                            src[lineno] += '*(volatile int*)0 = 0;'
                     tot_emitted += 1
                     fn_emitted += 1
             if rodata_stack:

@@ -52,7 +52,7 @@ class GlobalState:
         else:
             return "}"
 
-    def pascal_assignment(self, tp: str, val: float) -> str:
+    def pascal_assignment(self, tp: str, val: str) -> str:
         self.valuectr += 1
         address = (8 * self.valuectr) & 0x7FFF
         return 'v{} := p{}({}); v{}^ := {};'.format(tp, tp, address, tp, val)
