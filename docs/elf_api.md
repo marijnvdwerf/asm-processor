@@ -7,13 +7,12 @@ This document describes the public API surface of the ELF package and how it map
 ### ElfFile
 
 The main entry point for working with ELF files.
-
 ```rust
 // Rust
 pub struct ElfFile {
     pub data: Vec<u8>,     // Raw file data
     pub fmt: ElfFormat,    // Format information (endianness)
-    pub symtab: SymbolTable,
+    pub symtab: Section,   // Symbol table section
     pub sections: Vec<Section>,
 }
 
@@ -42,6 +41,14 @@ impl ElfFile {
     // Write ELF file to disk
     // Python: write(filename)
     pub fn write(&self, filename: &str) -> Result<(), Error>;
+
+    // Find symbol by name in symbol table
+    // Python: symtab.find_symbol(name)
+    pub fn find_symbol(&self, name: &str) -> Option<(usize, u32)>;
+
+    // Find symbol by name within a specific section
+    // Python: symtab.find_symbol_in_section(name, section)
+    pub fn find_symbol_in_section(&self, name: &str, section: &Section) -> u32;
 }
 ```
 
@@ -55,7 +62,7 @@ pub struct Section {
     pub name: String,
     pub data: Vec<u8>,
     pub index: usize,
-    pub relocated_by: Vec<RelocationTable>,
+    pub relocated_by: Vec<Section>,
     
     // Section header fields
     pub sh_type: u32,
@@ -71,32 +78,31 @@ impl Section {
     // Look up string in string table section
     // Python: lookup_str(offset)
     pub fn lookup_str(&self, offset: u32) -> Result<String, Error>;
-}
-```
 
-### SymbolTable
+    // Initialize symbol table (when sh_type == SHT_SYMTAB)
+    pub fn init_symbols(&mut self, sections: &[Section]);
+    
+    // Initialize relocations (when sh_type == SHT_REL or SHT_RELA)
+    pub fn init_relocs(&mut self);
+    
+    // Get local/global symbols
+    pub fn local_symbols(&self) -> Vec<Symbol>;
+    pub fn global_symbols(&self) -> Vec<Symbol>;
+    
+    // MIPS debug specific
+    pub fn relocate_mdebug(&mut self, original_offset: u32);
 
-Manages ELF symbols and symbol lookup.
-
-```rust
-// Rust
-pub struct SymbolTable {
-    pub data: Vec<u8>,
-    pub strtab: StringTable,
-    pub symbol_entries: Vec<Symbol>,
-    pub sh_info: u32,  // Number of local symbols
-    pub index: usize,
-}
-
-// Methods
-impl SymbolTable {
-    // Find symbol by name, returns (index, value)
+    // Find symbol by name in this section's symbol table
     // Python: find_symbol(name)
     pub fn find_symbol(&self, name: &str) -> Option<(usize, u32)>;
 
-    // Find symbol value within a specific section
-    // Python: find_symbol_in_section(name, section)
+    // Find symbol by name within this section
+    // Python: find_symbol_in_section(name, section) 
     pub fn find_symbol_in_section(&self, name: &str, section: &Section) -> u32;
+
+    // Get symbol entries
+    // Python: symbol_entries property
+    pub fn symbol_entries(&self) -> Vec<Symbol>;
 }
 ```
 
@@ -114,7 +120,6 @@ pub struct Symbol {
     pub st_other: u8,
     pub st_shndx: u16,
     pub name: String,
-    pub new_index: usize,  // Used during symbol table reorganization
 }
 
 // Methods
@@ -124,7 +129,7 @@ impl Symbol {
     pub fn from_parts(fmt: ElfFormat,
         st_name: u32, st_value: u32, st_size: u32,
         st_info: u8, st_other: u8, st_shndx: u16,
-        strtab: &StringTable, name: String) -> Result<Self, Error>;
+        strtab: &Section, name: String) -> Result<Self, Error>;
 
     // Convert symbol to binary format
     // Python: to_bin()
@@ -137,6 +142,25 @@ impl Symbol {
     // Get symbol type (object/func/section/etc)
     // Python: type property
     pub fn type_(&self) -> u8;
+
+    // Replace this symbol with another
+    // Python: replace_by property
+    pub fn replace_by(&mut self, other: Symbol);
+
+    // Get/set new index for symbol
+    // Python: new_index property
+    pub fn new_index(&self) -> usize;
+    pub fn set_new_index(&mut self, index: usize);
+
+    // Get/set symbol binding (local/global)
+    // Python: bind property
+    pub fn bind(&self) -> u8;
+    pub fn set_bind(&mut self, bind: u8);
+
+    // Get/set symbol type
+    // Python: type property 
+    pub fn type_(&self) -> u8;
+    pub fn set_type(&mut self, type_: u8);
 }
 ```
 
@@ -150,6 +174,7 @@ pub struct Relocation {
     pub r_offset: u32,
     pub r_info: u32,
     pub sym_index: usize,
+    pub r_addend: Option<u32>,
 }
 
 // Methods
@@ -157,30 +182,6 @@ impl Relocation {
     // Convert relocation to binary format
     // Python: to_bin()
     pub fn to_bin(&self) -> Vec<u8>;
-}
-```
-
-### RelocationTable
-
-Collection of relocations for a section.
-
-```rust
-// Rust
-pub struct RelocationTable {
-    pub sh_type: u32,  // SHT_REL or SHT_RELA
-    pub data: Vec<u8>,
-    pub relocations: Vec<Relocation>,
-}
-```
-
-### StringTable
-
-String table section.
-
-```rust
-// Rust
-pub struct StringTable {
-    pub data: Vec<u8>,
 }
 ```
 
@@ -259,3 +260,38 @@ let section = elf.add_section(
     Vec::new(),
 );
 ```
+
+## Additional Constants
+
+```rust
+// Symbol bindings
+pub const STB_LOCAL: u8 = 0;
+pub const STB_GLOBAL: u8 = 1;
+
+// Symbol types
+pub const STT_OBJECT: u8 = 1;
+pub const STT_FUNC: u8 = 2;
+
+// Symbol visibility
+pub const STV_DEFAULT: u8 = 0;
+
+// Special section indices
+pub const SHN_UNDEF: u16 = 0;
+pub const SHN_ABS: u16 = 0xfff1;
+
+// Section types
+pub const SHT_REL: u32 = 9;
+pub const SHT_RELA: u32 = 4;
+
+// MIPS debug symbol types
+pub const MIPS_DEBUG_ST_STATIC: u32 = 7;
+pub const MIPS_DEBUG_ST_STATIC_PROC: u32 = 8;
+pub const MIPS_DEBUG_ST_FILE: u32 = 0;
+pub const MIPS_DEBUG_ST_STRUCT: u32 = 1; 
+pub const MIPS_DEBUG_ST_UNION: u32 = 2;
+pub const MIPS_DEBUG_ST_ENUM: u32 = 3;
+pub const MIPS_DEBUG_ST_BLOCK: u32 = 4;
+pub const MIPS_DEBUG_ST_PROC: u32 = 5;
+pub const MIPS_DEBUG_ST_END: u32 = 6;
+```
+
