@@ -100,13 +100,12 @@ src/
 ├── asm/
 │   ├── mod.rs           // Re-exports ASM modules
 │   ├── block.rs         // GlobalAsmBlock: Assembly block processing
-│   └── function.rs      // Function: Assembly function handling
+│   └── function.rs      // Function namedtuple and related code
 ├── utils/
 │   ├── mod.rs           // Re-exports utility modules
 │   ├── state.rs         // GlobalState: Processing state
-│   ├── error.rs         // Error: Error handling
-│   └── constants.rs     // Constants: Shared constants
-├── processor.rs        // parse_source: Main source processing
+│   └── error.rs         // Error: Error handling
+├── processor.rs        // parse_source: Main source processing logic
 ├── objfile.rs         // fixup_objfile: Object file processing
 └── lib.rs              // Library entry point
 
@@ -439,20 +438,20 @@ byteorder = "1.4"
 - [x] ELF symbol module
 - [x] ELF relocation module
 - [x] Constants module
+- [x] ASM block module
+- [x] Function module
+- [x] State module
+- [x] Processor module
+- [x] Object file module
 
 ### In Progress
-- [ ] ELF file module
-- [ ] ASM block module
-- [ ] Function module
-- [ ] State module
-- [ ] Processor module
-- [ ] Object file module
-
-### Pending
 - [ ] Integration tests
 - [ ] Performance optimizations
 - [ ] Documentation
 - [ ] CI/CD setup
+
+### Pending
+- [ ] None
 
 ### Notes
 - All ELF-related core modules have been migrated with proper error handling
