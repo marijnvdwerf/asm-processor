@@ -150,7 +150,7 @@ impl ElfFile {
                 let old_offset = section.sh_offset;
                 section.sh_offset = outidx;
                 
-                if section.sh_type == SHT_MIPS_REGINFO && section.sh_offset != old_offset {
+                if section.sh_type == SHT_MIPS_DEBUG && section.sh_offset != old_offset {
                     section.relocate_mdebug(old_offset)?;
                 }
                 
