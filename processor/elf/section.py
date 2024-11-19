@@ -31,7 +31,8 @@ class Section:
         else:
             self.data = data[self.sh_offset:self.sh_offset + self.sh_size]
         self.index = index
-        self.relocated_by = []
+        self.relocated_by: List[Section] = []
+        self.name = ""
 
     @staticmethod
     def from_parts(fmt: ElfFormat, sh_name: int, sh_type: int, sh_flags: int, sh_link: int, sh_info: int, sh_addralign: int, sh_entsize: int, data: bytes, index: int) -> "Section":

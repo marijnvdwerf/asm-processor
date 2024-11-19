@@ -1,9 +1,7 @@
-from typing import Optional, TypeVar
+from typing import Optional
 from ..utils.constants import SHN_XINDEX
 from .format import ElfFormat
 from .section import Section
-
-T = TypeVar('T', bound='Symbol')
 
 class Symbol:
     """
@@ -27,7 +25,7 @@ class Symbol:
         self.visibility = self.st_other & 3
 
     @staticmethod
-    def from_parts(fmt: ElfFormat, st_name: int, st_value: int, st_size: int, st_info: int, st_other: int, st_shndx: int, strtab: Section, name: str) -> T:
+    def from_parts(fmt: ElfFormat, st_name: int, st_value: int, st_size: int, st_info: int, st_other: int, st_shndx: int, strtab: Section, name: str) -> "Symbol":
         header = fmt.pack('IIIBBH', st_name, st_value, st_size, st_info, st_other, st_shndx)
         return Symbol(fmt, header, strtab, name)
 
