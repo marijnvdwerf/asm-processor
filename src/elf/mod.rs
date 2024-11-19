@@ -1,3 +1,4 @@
+pub mod constants;
 pub mod file;
 pub mod format;
 pub mod header;
