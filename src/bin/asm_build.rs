@@ -62,8 +62,10 @@ fn parse_args() -> BuildConfig {
     compile_args.remove(out_ind + 1);
     compile_args.remove(out_ind);
 
-    // Extract input file
-    let in_file = PathBuf::from(compile_args.pop().expect("No input file specified"));
+    // Extract input file and resolve it
+    let in_file = PathBuf::from(compile_args.pop().expect("No input file specified"))
+        .canonicalize()
+        .expect("Failed to resolve input file path");
 
     // Get optimization flags
     let opt_flags: Vec<String> = compile_args.iter()
@@ -134,6 +136,22 @@ fn run_compiler(
     Ok(())
 }
 
+fn write_deps_file(out_file: &Path, deps: Option<Vec<String>>) -> io::Result<()> {
+    let deps_file = out_file.with_extension("asmproc.d");
+    
+    if let Some(deps) = deps {
+        let mut file = File::create(deps_file)?;
+        writeln!(file, "{}: {}", out_file.display(), deps.join(" \\\n    "))?;
+        for dep in deps {
+            writeln!(file, "\n{}:\n", dep)?;
+        }
+    } else {
+        // Remove deps file if it exists
+        fs::remove_file(deps_file).ok();
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = parse_args();
     let temp_dir = Builder::new()
@@ -154,7 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         filename: PathBuf::from(&config.in_file),
         post_process: None,
         assembler: Some(config.assembler_args.join(" ")),
-        asm_prelude: Some("prelude.inc".to_string()),
+        asm_prelude: None,  // No prelude in initial run
         input_enc: "latin1".to_string(),
         output_enc: "latin1".to_string(),
         drop_mdebug_gptab: config.asmproc_flags.contains(&"--drop-mdebug-gptab".to_string()),
@@ -171,7 +189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         opt_g: config.asmproc_flags.contains(&"-g".to_string()),
     };
 
-    if let Some(output) = run(&args, Some(&mut writer))? {
+    if let Some(ProcessorOutput { functions, dependencies }) = run(&args, Some(&mut writer))? {
         // Run compiler
         run_compiler(&config, &preprocessed_path)?;
 
@@ -180,7 +198,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             filename: PathBuf::from(&config.in_file),
             post_process: Some(PathBuf::from(&config.out_file)),
             assembler: Some(config.assembler_args.join(" ")),
-            asm_prelude: Some("prelude.inc".to_string()),
+            asm_prelude: Some(DEFAULT_PRELUDE.to_string()),
             input_enc: "latin1".to_string(),
             output_enc: "latin1".to_string(),
             drop_mdebug_gptab: config.asmproc_flags.contains(&"--drop-mdebug-gptab".to_string()),
@@ -198,6 +216,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         run::<std::io::BufWriter<File>>(&post_args, None)?;
+        
+        write_deps_file(&config.out_file, Some(dependencies))?;
     }
 
     Ok(())
