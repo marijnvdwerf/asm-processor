@@ -10,10 +10,16 @@ encoding_rs = "0.8"
 lazy_static = "1.4"
 thiserror = "1.0"
 byteorder = "1.4"
+tempfile = "3.8"
+uuid = { version = "1.4", features = ["v4"] }
 
 [[bin]]
 name = "asm-build"
 path = "src/bin/build.rs"
+
+[[bin]]
+name = "asm-processor"
+path = "src/bin/asm_processor.rs"
 
 [lib]
 name = "asm_processor"
