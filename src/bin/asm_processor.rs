@@ -1,12 +1,12 @@
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::io::{self, BufReader};
+use std::path::PathBuf;
 use clap::{Parser, ArgGroup};
 
 use asm_processor::{
     Error,
     Result,
-    Function,
+    asm::Function,
     parse_source,
     utils::options::Opts,
     objfile::fixup_objfile,
@@ -131,12 +131,12 @@ pub fn run(args: &Args) -> Result<Option<ProcessorOutput>> {
     let opts = Opts::new(
         opt,
         args.framepointer,
-        args.mips1,
         args.kpic,
-        pascal,
-        &args.input_enc,
-        &args.output_enc,
         args.encode_cutscene_data_floats,
+        args.mips1,
+        false, // pascal
+        &args.filename,
+        &args.output_enc,
     );
 
     // Handle the case where we're not post-processing first
