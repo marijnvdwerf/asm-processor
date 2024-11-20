@@ -7,7 +7,7 @@ fn main() -> Result<()> {
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout);
     
-    if let Err(e) = run(&args, Some(&mut writer)) {
+    if let Err(e) = run(&args, Some(&mut writer), None) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }

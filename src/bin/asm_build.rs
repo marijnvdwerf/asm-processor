@@ -183,7 +183,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         opt_g: config.asmproc_flags.contains(&"-g".to_string()),
     };
 
-    if let Some(ProcessorOutput { functions, dependencies }) = run(&args, Some(&mut writer))? {
+    if let Some(ProcessorOutput { functions, dependencies }) = run(&args, Some(&mut writer), None)? {
         // Run compiler
         run_compiler(&config, &preprocessed_path)?;
 
@@ -209,7 +209,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             opt_g: config.asmproc_flags.contains(&"-g".to_string()),
         };
 
-        run::<std::io::BufWriter<File>>(&post_args, None)?;
+        run::<std::io::BufWriter<File>>(&post_args, None, Some(functions))?;
         
         write_deps_file(&config.out_file, Some(dependencies))?;
     }
