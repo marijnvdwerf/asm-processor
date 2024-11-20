@@ -17,6 +17,7 @@ use crate::elf::{
 use crate::elf::file::ElfFile;
 use crate::utils::Error as CrateError;
 use crate::asm::Function;
+use crate::elf::Relocation;
 
 const SECTIONS: &[&str] = &[".data", ".text", ".rodata", ".bss"];
 
@@ -147,7 +148,7 @@ pub fn fixup_objfile(
         // Check and collect section data
         for (sectype, (temp_name, size)) in &function.data {
             if let Some(temp_name) = temp_name.as_ref() {
-                if *size == 0 {
+                if size == 0 {
                     continue;
                 }
                 
@@ -202,7 +203,7 @@ pub fn fixup_objfile(
             
             // Add section labels and assembly
             for (sectype, (temp_name, _)) in &function.data {
-                if let Some(temp_name) = temp_name {
+                if let Some(temp_name) = temp_name.as_ref() {
                     asm.push(format!(".section {}", sectype));
                     asm.push(format!("glabel {}_asm_start", temp_name));
                 }
@@ -212,7 +213,7 @@ pub fn fixup_objfile(
             asm.extend(function.asm_conts.iter().cloned());
             
             for (sectype, (temp_name, _)) in &function.data {
-                if let Some(temp_name) = temp_name {
+                if let Some(temp_name) = temp_name.as_ref() {
                     asm.push(format!(".section {}", sectype));
                     asm.push(format!("glabel {}_asm_end", temp_name));
                 }
@@ -279,7 +280,7 @@ pub fn fixup_objfile(
                     bytes.reverse();
                     
                     if let Some(target) = objfile.find_section(".rodata") {
-                        if let Some(found_pos) = find_bytes_in_section(&target.data, &bytes, prev_locs.rodata) {
+                        if let Some(found_pos) = find_bytes_in_section(&target.data, &bytes, prev_locs.rodata as usize) {
                             // Handle double alignment for non-matching builds
                             if index == 0 && dummy_bytes_list.len() > 1 && 
                                target.data[found_pos+4..found_pos+8] == [0, 0, 0, 0] {
@@ -287,7 +288,7 @@ pub fn fixup_objfile(
                                 pos += 4;
                                 continue;
                             }
-                            moved_late_rodata.insert(pos, found_pos as u32);
+                            moved_late_rodata.insert(pos as usize, found_pos);
                             pos += 4;
                         }
                     }
@@ -295,10 +296,10 @@ pub fn fixup_objfile(
                 
                 if *jtbl_size > 0 {
                     assert!(!dummy_bytes_list.is_empty(), "should always have dummy bytes before jtbl data");
-                    let pos_u = pos as usize;
+                    let pos_usize = pos as usize;
                     for i in 0..*jtbl_size {
-                        moved_late_rodata.insert(pos + i as u32, (prev_locs.rodata + i) as u32);
-                        jtbl_rodata_positions.insert(prev_locs.rodata + i);
+                        moved_late_rodata.insert(pos_usize + i, (prev_locs.rodata as usize + i));
+                        jtbl_rodata_positions.insert(prev_locs.rodata as usize + i);
                     }
                     pos += *jtbl_size as u32;
                 }
@@ -312,9 +313,11 @@ pub fn fixup_objfile(
         for obj in &[&asm_objfile, &objfile] {
             if let Some(sec) = obj.find_section(sectype) {
                 for reltab in &sec.relocated_by {
-                    for rel in &reltab.relocations {
-                        if let Some(sym) = obj.symtab.symbol_entries.get(rel.sym_index) {
-                            relocated_symbols.insert(sym.clone());
+                    if let Some(reltab_section) = objfile.find_section(&reltab.to_string()) {
+                        for rel in &reltab_section.relocations {
+                            if let Some(sym) = objfile.get_symbol_entries().get(rel.get_sym_index() as usize) {
+                                relocated_symbols.insert(sym.clone());
+                            }
                         }
                     }
                 }
@@ -415,6 +418,7 @@ fn process_sections(
 
         // Update section data
         if let Some(section) = objfile.find_section_mut(sectype.as_str()) {
+            let section_data = section.data.clone();
             section.data = data;
         }
     }
@@ -545,7 +549,7 @@ fn process_symbols(
         let mut new_syms = Vec::new();
         
         // Process existing symbols
-        for symbol in &symtab.symbol_entries {
+        for symbol in &symtab.symbols {
             if !is_temp_name(&symbol.name) {
                 new_syms.push(symbol.clone());
             }
@@ -554,13 +558,12 @@ fn process_symbols(
         // Sort symbols
         new_syms.sort_by_key(|s| (!s.bind() == STB_LOCAL, s.name.clone() == "_gp_disp"));
 
-        // Update symbol table
-        symtab.data = new_syms.iter()
-            .flat_map(|s| s.to_bin().unwrap_or_default())
-            .collect();
-        symtab.sh_info = new_syms.iter()
+        let local_count = new_syms.iter()
             .filter(|s| s.bind() == STB_LOCAL)
             .count() as u32;
+
+        symtab.symbols = new_syms;
+        symtab.sh_info = local_count;
     }
 
     Ok(())
@@ -592,9 +595,48 @@ fn process_relocations(
 
         // Update section data
         section.data = relocs.iter()
-            .flat_map(|r| r.to_bin().unwrap_or_default())
+            .flat_map(|r| r.to_bytes())
             .collect();
     }
 
     Ok(())
+}
+
+impl ElfFile {
+    fn get_symbol_entries(&self) -> &Vec<Symbol> {
+        &self.sections[self.symtab].symbols
+    }
+
+    fn get_null_terminated_string(&self, offset: u32) -> Result<String> {
+        if let Some(strtab) = self.find_section(".strtab") {
+            let start = offset as usize;
+            let end = strtab.data[start..]
+                .iter()
+                .position(|&b| b == 0)
+                .map(|p| start + p)
+                .unwrap_or(strtab.data.len());
+            
+            String::from_utf8(strtab.data[start..end].to_vec())
+                .map_err(|e| ObjFileError::ConversionError(e.to_string()))
+        } else {
+            Err(ObjFileError::SectionError("String table not found".to_string()))
+        }
+    }
+
+    fn find_section_mut(&mut self, name: &str) -> Option<&mut ElfSection> {
+        self.sections.iter_mut().find(|s| s.name == name)
+    }
+}
+
+impl Relocation {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(8);
+        bytes.extend_from_slice(&self.r_offset.to_le_bytes());
+        bytes.extend_from_slice(&self.r_info.to_le_bytes());
+        bytes
+    }
+
+    fn get_sym_index(&self) -> u32 {
+        self.r_info >> 8
+    }
 }
