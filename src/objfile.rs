@@ -152,7 +152,7 @@ pub fn fixup_objfile(
             let temp_name = &data_tuple.0;
             let size = data_tuple.1;
             
-            if let Some(ref temp_name) = temp_name {
+            if !temp_name.is_empty() {
                 if size == 0 {
                     continue;
                 }
@@ -209,7 +209,7 @@ pub fn fixup_objfile(
             // Add section labels and assembly
             for (sectype, data_tuple) in &function.data {
                 let temp_name = &data_tuple.0;
-                if let Some(temp_name) = temp_name {
+                if !temp_name.is_empty() {
                     asm.push(format!(".section {}", sectype));
                     asm.push(format!("glabel {}_asm_start", temp_name));
                 }
@@ -220,7 +220,7 @@ pub fn fixup_objfile(
             
             for (sectype, data_tuple) in &function.data {
                 let temp_name = &data_tuple.0;
-                if let Some(temp_name) = temp_name {
+                if !temp_name.is_empty() {
                     asm.push(format!(".section {}", sectype));
                     asm.push(format!("glabel {}_asm_end", temp_name));
                 }
@@ -511,7 +511,8 @@ fn process_mdebug_symbols(
                     
                     let sym = Symbol::from_parts(
                         objfile.fmt.clone(),
-                        strtab_index,
+                        u32::try_from(strtab_index).map_err(|_| 
+                            ObjFileError::ConversionError("strtab_index conversion failed".to_string()))?,
                         value,
                         0,
                         (binding << 4) | symtype,
