@@ -23,7 +23,6 @@ struct BuildConfig {
 
 fn parse_args() -> BuildConfig {
     let args: Vec<String> = env::args().skip(1).collect();
-    println!("Args: {:?}", args);
     
     // Find separators
     let sep1 = args.iter()
@@ -132,15 +131,18 @@ fn write_deps_file(out_file: &Path, deps: Option<Vec<String>>) -> io::Result<()>
     let deps_file = out_file.with_extension("asmproc.d");
     
     if let Some(deps) = deps {
-        let mut file = File::create(deps_file)?;
-        writeln!(file, "{}: {}", out_file.display(), deps.join(" \\\n    "))?;
-        for dep in deps {
-            writeln!(file, "\n{}:\n", dep)?;
+        if !deps.is_empty() {
+            let mut file = File::create(deps_file)?;
+            writeln!(file, "{}: {}", out_file.display(), deps.join(" \\\n    "))?;
+            for dep in deps {
+                writeln!(file, "\n{}:", dep)?;
+            }
         }
     } else {
         // Remove deps file if it exists
         fs::remove_file(deps_file).ok();
     }
+
     Ok(())
 }
 
