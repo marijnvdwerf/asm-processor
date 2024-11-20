@@ -7,7 +7,7 @@ use tempfile::NamedTempFile;
 use crate::elf::{
     Symbol,
     constants::{
-        STB_LOCAL, SHT_REL, SHT_RELA
+        STB_LOCAL, SHT_REL, SHT_RELA, SHN_UNDEF
     }
 };
 
@@ -273,27 +273,23 @@ pub fn fixup_objfile(
     // Process late rodata if present
     if let (Some(start_name), Some(end_name)) = (late_rodata_source_name_start, late_rodata_source_name_end) {
         if let Some(source) = asm_objfile.find_section(".late_rodata") {
-            let start_pos = asm_objfile.find_symbol_in_section(&start_name, source)?;
+            let mut start_pos = asm_objfile.find_symbol_in_section(&start_name, source)?;
             let _end_pos = asm_objfile.find_symbol_in_section(&end_name, source)?;
             
             let mut pos = start_pos;
             for (dummy_bytes_list, jtbl_size) in all_late_rodata_dummy_bytes.iter().zip(all_jtbl_rodata_size.iter()) {
                 for (index, dummy_bytes) in dummy_bytes_list.iter().enumerate() {
-                    let mut bytes = Vec::from(dummy_bytes.as_bytes());
-                    bytes.reverse();
-                    
-                    if let Some(target) = objfile.find_section(".rodata") {
-                        if let Some(found_pos) = find_bytes_in_section(&target.data, &bytes, prev_locs.rodata as usize) {
+                    if let Some(target) = objfile.find_section_mut(".rodata") {
+                        let mut data = target.data.clone();
+                        let pos_usize = pos as usize;
+                        
+                        if index == 0 && dummy_bytes_list.len() > 1 && 
+                           data[pos_usize+4..pos_usize+8] == [0, 0, 0, 0] {
                             // Handle double alignment for non-matching builds
-                            if index == 0 && dummy_bytes_list.len() > 1 && 
-                               target.data[found_pos+4..found_pos+8] == [0, 0, 0, 0] {
-                                // Skip alignment padding
-                                pos += 4;
-                                continue;
-                            }
-                            moved_late_rodata.insert(pos as usize, found_pos);
-                            pos += 4;
+                            data[pos_usize..pos_usize+4].copy_from_slice(&[0, 0, 0, 0]);
+                            start_pos = (pos_usize + 4) as u32;
                         }
+                        target.data = data;
                     }
                 }
                 
@@ -357,12 +353,6 @@ pub fn fixup_objfile(
         .map_err(|e| ObjFileError::from(e))?;
 
     Ok(())
-}
-
-fn find_bytes_in_section(data: &[u8], pattern: &[u8], start_pos: usize) -> Option<usize> {
-    data[start_pos..].windows(pattern.len())
-        .position(|window| window == pattern)
-        .map(|pos| pos + start_pos)
 }
 
 // Helper functions for type conversions
@@ -436,25 +426,36 @@ fn process_symbols(
     _func_sizes: &HashMap<String, usize>,
     _moved_late_rodata: &HashMap<usize, usize>,
 ) -> Result<()> {
-    if let Some(symtab) = objfile.find_section_mut(".symtab") {
-        let mut new_syms = Vec::new();
-        
-        // Process existing symbols
+    let mut new_syms = Vec::new();
+    let mut name_to_sym: HashMap<String, Symbol> = HashMap::new();
+    
+    if let Some(symtab) = objfile.find_section(".symtab") {
         for symbol in &symtab.symbols {
             if !is_temp_name(&symbol.name) {
-                new_syms.push(symbol.clone());
+                if let Some(existing) = name_to_sym.get(&symbol.name) {
+                    if symbol.st_shndx != SHN_UNDEF && 
+                       !(existing.st_shndx == symbol.st_shndx && 
+                         existing.st_value == symbol.st_value) {
+                        return Err(ObjFileError::SymbolError(
+                            format!("symbol \"{}\" defined twice", symbol.name)));
+                    }
+                } else {
+                    name_to_sym.insert(symbol.name.clone(), symbol.clone());
+                    new_syms.push(symbol.clone());
+                }
             }
         }
 
-        // Sort symbols
-        new_syms.sort_by_key(|s| (!s.bind() == STB_LOCAL, s.name.clone() == "_gp_disp"));
-
-        let local_count = new_syms.iter()
-            .filter(|s| s.bind() == STB_LOCAL)
-            .count() as u32;
-
-        symtab.symbols = new_syms;
-        symtab.sh_info = local_count;
+        // Sort symbols (locals first, _gp_disp last)
+        new_syms.sort_by_key(|s| (!s.bind() == STB_LOCAL, s.name == "_gp_disp"));
+        
+        // Update symbol table
+        if let Some(symtab_mut) = objfile.find_section_mut(".symtab") {
+            symtab_mut.symbols = new_syms;
+            symtab_mut.sh_info = symtab_mut.symbols.iter()
+                .filter(|s| s.bind() == STB_LOCAL)
+                .count() as u32;
+        }
     }
 
     Ok(())
@@ -464,42 +465,46 @@ fn process_relocations(
     objfile: &mut ElfFile,
     modified_text_positions: &HashSet<usize>,
     jtbl_rodata_positions: &HashSet<usize>,
-    _moved_late_rodata: &HashMap<usize, usize>,
+    moved_late_rodata: &HashMap<usize, usize>,
 ) -> Result<()> {
     let mut sections_to_process = Vec::new();
     
-    // Collect sections to process first
-    for section in &objfile.sections {
-        if section.sh_type != SHT_REL && section.sh_type != SHT_RELA {
-            continue;
+    // First collect all sections we need to process
+    for (i, section) in objfile.sections.iter().enumerate() {
+        if section.sh_type == SHT_REL || section.sh_type == SHT_RELA {
+            sections_to_process.push((i, section.sh_info as usize, section.name.clone()));
         }
-        sections_to_process.push((section.index, section.sh_info));
     }
-
-    // Process each section
-    for (section_idx, target_idx) in sections_to_process {
-        // Get target section info first
-        let target_name = {
-            let target_section = &objfile.sections[target_idx as usize];
-            target_section.name.clone()
-        };
+    
+    // Now process each section
+    for (section_idx, _target_idx, target_name) in sections_to_process {
+        let mut new_relocs = Vec::new();
+        {
+            let section = &objfile.sections[section_idx];
+            for rel in &section.relocations {
+                let offset = u32_to_usize(rel.r_offset)?;
+                if (target_name == ".text" && modified_text_positions.contains(&offset)) ||
+                   (target_name == ".rodata" && jtbl_rodata_positions.contains(&offset)) {
+                    continue;
+                }
+                
+                // Update relocated symbol index
+                let mut new_rel = rel.clone();
+                if let Some(new_offset) = moved_late_rodata.get(&offset) {
+                    new_rel.r_offset = *new_offset as u32;
+                }
+                new_relocs.push(new_rel);
+            }
+        }
         
-        // Then process the relocation section
+        // Update section data
         let section = &mut objfile.sections[section_idx];
-        
-        let mut relocs = section.relocations.clone();
-        relocs.retain(|rel| {
-            let offset = u32_to_usize(rel.r_offset).unwrap_or(0);
-            !(target_name == ".text" && modified_text_positions.contains(&offset) ||
-              target_name == ".rodata" && jtbl_rodata_positions.contains(&offset))
-        });
-
-        relocs.sort_by_key(|rel| rel.r_offset);
-        section.data = relocs.iter()
+        section.relocations = new_relocs;
+        section.data = section.relocations.iter()
             .flat_map(|r| r.to_bytes(&section.fmt))
             .collect();
     }
-
+    
     Ok(())
 }
 
