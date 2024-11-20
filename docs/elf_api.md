@@ -10,9 +10,10 @@ The main entry point for working with ELF files.
 ```rust
 // Rust
 pub struct ElfFile {
-    pub data: Vec<u8>,     // Raw file data
-    pub fmt: ElfFormat,    // Format information (endianness)
+    pub header: ElfHeader,
     pub sections: Vec<ElfSection>,
+    pub fmt: ElfFormat,
+    pub symtab: usize,  // Index of symbol table section
 }
 
 // Methods
@@ -46,6 +47,8 @@ impl ElfFile {
     // Find symbol by name within a specific section
     // Python: symtab.find_symbol_in_section(name, section)
     pub fn find_symbol_in_section(&self, name: &str, section: &ElfSection) -> u32;
+
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Error>;
 }
 ```
 
@@ -56,18 +59,23 @@ Represents an ELF section.
 ```rust
 // Rust
 pub struct ElfSection {
-    pub name: String,
-    pub data: Vec<u8>,
-    pub index: usize,
-    pub relocated_by: Vec<ElfSection>,
-    
-    // Section header fields
+    pub fmt: ElfFormat,
+    pub sh_name: u32,
     pub sh_type: u32,
     pub sh_flags: u32,
-    pub sh_link: usize,
+    pub sh_addr: u32,
+    pub sh_offset: u32,
+    pub sh_size: u32,
+    pub sh_link: u32,
     pub sh_info: u32,
     pub sh_addralign: u32,
     pub sh_entsize: u32,
+    pub data: Vec<u8>,
+    pub symbols: Vec<Symbol>,
+    pub relocations: Vec<Relocation>,
+    pub index: usize,
+    pub name: String,
+    pub relocated_by: Vec<usize>,
 }
 
 // Methods
@@ -100,6 +108,10 @@ impl ElfSection {
     // Get symbol entries
     // Python: symbol_entries property
     pub fn symbol_entries(&self) -> Vec<Symbol>;
+
+    pub fn new(fmt: ElfFormat, header: &[u8]) -> Result<Self, Error>;
+    pub fn init_data(&mut self, data: &[u8]) -> Result<(), Error>;
+    pub fn late_init(&mut self, sections: &mut [ElfSection]) -> Result<(), Error>;
 }
 ```
 
@@ -117,6 +129,8 @@ pub struct Symbol {
     pub st_other: u8,
     pub st_shndx: u16,
     pub name: String,
+    pub visibility: u8,
+    pub fmt: ElfFormat,
 }
 
 // Methods
@@ -170,7 +184,6 @@ Represents a relocation entry.
 pub struct Relocation {
     pub r_offset: u32,
     pub r_info: u32,
-    pub sym_index: usize,
     pub r_addend: Option<u32>,
 }
 
@@ -261,34 +274,155 @@ let section = elf.add_section(
 ## Additional Constants
 
 ```rust
-// Symbol bindings
-pub const STB_LOCAL: u8 = 0;
-pub const STB_GLOBAL: u8 = 1;
+// ELF Header constants
+pub const EI_NIDENT: usize = 16;
+pub const EI_CLASS: usize = 4;
+pub const EI_DATA: usize = 5;
+pub const EI_VERSION: usize = 6;
+pub const EI_OSABI: usize = 7;
+pub const EI_ABIVERSION: usize = 8;
+pub const STN_UNDEF: u32 = 0;
 
-// Symbol types
-pub const STT_OBJECT: u8 = 1;
-pub const STT_FUNC: u8 = 2;
-
-// Symbol visibility
-pub const STV_DEFAULT: u8 = 0;
-
-// Special section indices
+// Section Header constants
 pub const SHN_UNDEF: u16 = 0;
 pub const SHN_ABS: u16 = 0xfff1;
+pub const SHN_COMMON: u16 = 0xfff2;
+pub const SHN_XINDEX: u16 = 0xffff;
+pub const SHN_LORESERVE: u16 = 0xff00;
 
-// Section types
-pub const SHT_REL: u32 = 9;
+// Symbol Type constants
+pub const STT_NOTYPE: u8 = 0;
+pub const STT_OBJECT: u8 = 1;
+pub const STT_FUNC: u8 = 2;
+pub const STT_SECTION: u8 = 3;
+pub const STT_FILE: u8 = 4;
+pub const STT_COMMON: u8 = 5;
+pub const STT_TLS: u8 = 6;
+
+// Symbol Binding constants
+pub const STB_LOCAL: u8 = 0;
+pub const STB_GLOBAL: u8 = 1;
+pub const STB_WEAK: u8 = 2;
+
+// Symbol Visibility constants
+pub const STV_DEFAULT: u8 = 0;
+pub const STV_INTERNAL: u8 = 1;
+pub const STV_HIDDEN: u8 = 2;
+pub const STV_PROTECTED: u8 = 3;
+
+// Section Header Type constants
+pub const SHT_NULL: u32 = 0;
+pub const SHT_PROGBITS: u32 = 1;
+pub const SHT_SYMTAB: u32 = 2;
+pub const SHT_STRTAB: u32 = 3;
 pub const SHT_RELA: u32 = 4;
+pub const SHT_HASH: u32 = 5;
+pub const SHT_DYNAMIC: u32 = 6;
+pub const SHT_NOTE: u32 = 7;
+pub const SHT_NOBITS: u32 = 8;
+pub const SHT_REL: u32 = 9;
+pub const SHT_SHLIB: u32 = 10;
+pub const SHT_DYNSYM: u32 = 11;
+pub const SHT_INIT_ARRAY: u32 = 14;
+pub const SHT_FINI_ARRAY: u32 = 15;
+pub const SHT_PREINIT_ARRAY: u32 = 16;
+pub const SHT_GROUP: u32 = 17;
+pub const SHT_SYMTAB_SHNDX: u32 = 18;
+pub const SHT_MIPS_GPTAB: u32 = 0x70000003;
+pub const SHT_MIPS_DEBUG: u32 = 0x70000005;
+pub const SHT_MIPS_REGINFO: u32 = 0x70000006;
+pub const SHT_MIPS_OPTIONS: u32 = 0x7000000d;
 
-// MIPS debug symbol types
-pub const MIPS_DEBUG_ST_STATIC: u32 = 7;
-pub const MIPS_DEBUG_ST_STATIC_PROC: u32 = 8;
-pub const MIPS_DEBUG_ST_FILE: u32 = 0;
-pub const MIPS_DEBUG_ST_STRUCT: u32 = 1; 
-pub const MIPS_DEBUG_ST_UNION: u32 = 2;
-pub const MIPS_DEBUG_ST_ENUM: u32 = 3;
-pub const MIPS_DEBUG_ST_BLOCK: u32 = 4;
-pub const MIPS_DEBUG_ST_PROC: u32 = 5;
-pub const MIPS_DEBUG_ST_END: u32 = 6;
+// Section Header Flags
+pub const SHF_WRITE: u32 = 0x1;
+pub const SHF_ALLOC: u32 = 0x2;
+pub const SHF_EXECINSTR: u32 = 0x4;
+pub const SHF_MERGE: u32 = 0x10;
+pub const SHF_STRINGS: u32 = 0x20;
+pub const SHF_INFO_LINK: u32 = 0x40;
+pub const SHF_LINK_ORDER: u32 = 0x80;
+pub const SHF_OS_NONCONFORMING: u32 = 0x100;
+pub const SHF_GROUP: u32 = 0x200;
+pub const SHF_TLS: u32 = 0x400;
 ```
+
+### ElfFormat
+
+Represents the format of an ELF file.
+
+```rust
+pub struct ElfFormat {
+    pub is_big_endian: bool,
+}
+
+impl ElfFormat {
+    pub fn new(is_big_endian: bool) -> Self;
+    pub fn pack_u16(&self, data: &mut [u8], value: u16) -> Result<(), Error>;
+    pub fn pack_u32(&self, data: &mut [u8], value: u32) -> Result<(), Error>;
+    pub fn unpack_u16(&self, data: &[u8]) -> Result<u16, Error>;
+    pub fn unpack_u32(&self, data: &[u8]) -> Result<u32, Error>;
+    pub fn pack_symbol(&self, symbol: &Symbol) -> Result<Vec<u8>, Error>;
+    pub fn unpack_symbol(&self, data: &[u8]) -> Result<(u32, u32, u32, u8, u8, u16), Error>;
+}
+```
+
+### ElfHeader
+
+Represents the ELF header.
+
+```rust
+pub struct ElfHeader {
+    pub e_ident: [u8; EI_NIDENT],
+    pub e_type: u16,
+    pub e_machine: u16,
+    pub e_version: u32,
+    pub e_entry: u32,
+    pub e_phoff: u32,
+    pub e_shoff: u32,
+    pub e_flags: u32,
+    pub e_ehsize: u16,
+    pub e_phentsize: u16,
+    pub e_phnum: u16,
+    pub e_shentsize: u16,
+    pub e_shnum: u16,
+    pub e_shstrndx: u16,
+}
+```
+
+## MIPS-Specific Features
+
+### Debug Sections
+- Support for `.mdebug` sections (SHT_MIPS_DEBUG)
+- Support for `.gptab` sections (SHT_MIPS_GPTAB)
+- Relocation of debug information
+- MIPS-specific section types and flags
+
+### Methods
+```rust
+impl ElfFile {
+    // Remove MIPS debug sections
+    pub fn drop_mdebug_gptab(&mut self);
+}
+
+impl ElfSection {
+    // Relocate MIPS debug information
+    pub fn relocate_mdebug(&mut self, original_offset: u32) -> Result<(), Error>;
+}
+```
+
+## Error Handling
+
+The library uses a custom Error type that covers:
+- Invalid format errors
+- I/O errors
+- Data parsing errors
+- Section manipulation errors
+- Symbol resolution errors
+
+All operations that can fail return `Result<T, Error>`.
+
+pub trait Section {
+    fn lookup_str(&self, index: usize) -> Result<String, Error>;
+    fn add_str(&mut self, s: &str) -> Result<u32, Error>;
+}
 
