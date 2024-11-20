@@ -338,13 +338,17 @@ pub fn fixup_objfile(
         }
     }
 
-    // Drop debug sections if requested
-    if drop_mdebug_gptab {
-        objfile.drop_mdebug_gptab();
-    }
+    // Handle debug sections
+    let mdebug_section = if drop_mdebug_gptab {
+        objfile.drop_mdebug_gptab()
+    } else {
+        objfile.find_section(".mdebug").cloned()
+    };
 
     // Process symbols and relocations
-    process_symbols(&mut objfile, convert_statics, &all_text_glabels, &relocated_symbols, &func_sizes, &moved_late_rodata)?;
+    process_symbols(&mut objfile, convert_statics, &all_text_glabels, 
+                   &relocated_symbols, &func_sizes, &moved_late_rodata, 
+                   mdebug_section)?;
     process_relocations(&mut objfile, &modified_text_positions, &jtbl_rodata_positions, &moved_late_rodata)?;
 
     // Write back the modified object file
@@ -420,11 +424,12 @@ fn process_sections(
 
 fn process_symbols(
     objfile: &mut ElfFile,
-    _convert_statics: &str,
-    _all_text_glabels: &HashSet<String>,
-    _relocated_symbols: &HashSet<Symbol>,
-    _func_sizes: &HashMap<String, usize>,
-    _moved_late_rodata: &HashMap<usize, usize>,
+    convert_statics: &str,
+    all_text_glabels: &HashSet<String>,
+    relocated_symbols: &HashSet<Symbol>,
+    func_sizes: &HashMap<String, usize>,
+    moved_late_rodata: &HashMap<usize, usize>,
+    _mdebug_section: Option<ElfSection>,
 ) -> Result<()> {
     let mut new_syms = Vec::new();
     let mut name_to_sym: HashMap<String, Symbol> = HashMap::new();
@@ -516,7 +521,6 @@ impl ElfFile {
     fn find_section_mut(&mut self, name: &str) -> Option<&mut ElfSection> {
         self.sections.iter_mut().find(|s| s.name == name)
     }
-
 }
 
 impl Relocation {

@@ -126,13 +126,23 @@ impl ElfFile {
         Ok(index)
     }
 
-    pub fn drop_mdebug_gptab(&mut self) {
-        while let Some(section) = self.sections.last() {
-            if section.sh_type != SHT_MIPS_DEBUG && section.sh_type != SHT_MIPS_GPTAB {
-                break;
-            }
-            self.sections.pop();
+    pub fn drop_mdebug_gptab(&mut self) -> Option<ElfSection> {
+        // Save mdebug section if present
+        let mdebug = self.find_section(".mdebug").cloned();
+        
+        // Filter out debug sections
+        self.sections.retain(|section| {
+            !section.name.starts_with(".mdebug") && 
+            !section.name.starts_with(".gptab") &&
+            !section.name.starts_with(".reginfo")
+        });
+
+        // Recompute section indices
+        for (index, section) in self.sections.iter_mut().enumerate() {
+            section.index = index;
         }
+
+        mdebug
     }
 
     pub fn find_symbol(&self, name: &str) -> Option<(usize, u32)> {
