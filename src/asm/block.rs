@@ -7,6 +7,7 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use encoding_rs::Encoding;
 use std::convert::TryFrom;
+use hex::ToHex;
 
 lazy_static! {
     static ref RE_COMMENT_OR_STRING: Regex = Regex::new(
@@ -71,8 +72,7 @@ impl GlobalAsmBlock {
     }
 
     fn count_quoted_size(&self, line: &str, z: bool, real_line: &str, output_enc: &str) -> Result<usize> {
-        // Handle output encoding properly
-        let enc = Encoding::for_label(output_enc)
+        let enc = Encoding::for_label(output_enc.as_bytes())
             .ok_or_else(|| Error::AssemblyProcessing("Invalid encoding".into()))?;
         let (encoded, _, _) = enc.encode(line);
         let line = String::from_utf8_lossy(&encoded);
@@ -339,11 +339,11 @@ impl GlobalAsmBlock {
             return Err(self.fail("no function labels found", None));
         }
 
-        let mut late_rodata_dummy_bytes = Vec::new();
-        let mut late_rodata_asm_conts = Vec::new();
+        let num_instr = self.fn_section_sizes[".text"] / 4;
+        let mut late_rodata_dummy_bytes: Vec<String> = Vec::new();
+        let mut late_rodata_fn_output = Vec::new();
         let mut jtbl_rodata_size = 0;
-        let mut data = HashMap::new();
-        let mut text_name = None;
+        let mut data: HashMap<String, (String, usize)> = HashMap::new();
 
         // Handle text section and late rodata
         if self.fn_section_sizes[".text"] > 0 || !self.late_rodata_asm_conts.is_empty() {
@@ -357,14 +357,14 @@ impl GlobalAsmBlock {
             for (line_no, count) in &self.fn_ins_inds {
                 for _ in 0..*count {
                     if fn_emitted > MAX_FN_SIZE && 
-                       instr_count - tot_emitted > state.min_instr_count() {
+                       instr_count - tot_emitted > state.min_instr_count {
                         // Reset counters when function gets too large
                         fn_emitted = 0;
                         fn_skipped = 0;
                         skipping = true;
                     }
 
-                    if skipping && fn_skipped < state.skip_instr_count() {
+                    if skipping && fn_skipped < state.skip_instr_count {
                         fn_skipped += 1;
                         tot_skipped += 1;
                     } else {
@@ -392,14 +392,12 @@ impl GlobalAsmBlock {
             }
         }
 
-        let mut late_rodata_fn_output = Vec::new();
         if self.fn_section_sizes[".late_rodata"] > 0 {
             let size = self.fn_section_sizes[".late_rodata"] / 4;
             let mut skip_next = false;
             let mut needs_double = self.late_rodata_alignment != 0;
             let mut extra_mips1_nop = false;
 
-            // Pascal vs C-specific sizes
             let (jtbl_size, jtbl_min_rodata_size) = if state.pascal {
                 (if state.mips1 { 9 } else { 8 }, 2)
             } else {
@@ -438,12 +436,12 @@ impl GlobalAsmBlock {
 
                 // Handle doubles and floats with MIPS1 considerations
                 let dummy_bytes = state.next_late_rodata_hex();
-                late_rodata_dummy_bytes.push(dummy_bytes.clone());
+                late_rodata_dummy_bytes.push(hex::encode(&dummy_bytes));
 
                 if self.late_rodata_alignment == 4 * ((i + 1) % 2 + 1) && i + 1 < size {
                     // Double handling
                     let dummy_bytes2 = state.next_late_rodata_hex();
-                    late_rodata_dummy_bytes.push(dummy_bytes2.clone());
+                    late_rodata_dummy_bytes.push(hex::encode(&dummy_bytes2));
                     let combined = [dummy_bytes, dummy_bytes2].concat();
                     let fval = f64::from_be_bytes(combined.try_into().unwrap());
                     
@@ -524,7 +522,7 @@ impl GlobalAsmBlock {
             asm_conts: self.asm_conts,
             late_rodata_dummy_bytes,
             jtbl_rodata_size,
-            late_rodata_asm_conts,
+            late_rodata_asm_conts: self.late_rodata_asm_conts,
             fn_desc: self.fn_desc,
             data,
             late_rodata: None,
