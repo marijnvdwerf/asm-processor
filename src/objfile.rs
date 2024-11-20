@@ -152,7 +152,7 @@ pub fn fixup_objfile(
             let temp_name = &data_tuple.0;
             let size = data_tuple.1;
             
-            if let Some(temp_name) = temp_name {
+            if let Some(ref temp_name) = temp_name {
                 if size == 0 {
                     continue;
                 }
@@ -425,7 +425,6 @@ fn process_sections(
 
         // Update section data
         if let Some(section) = objfile.find_section_mut(sectype.as_str()) {
-            let section_data = section.data.clone();
             section.data = data;
         }
     }
@@ -443,7 +442,9 @@ fn process_mdebug_symbols(
     
     if let Some(mdebug_section) = objfile.find_section(".mdebug") {
         let mut static_name_count = HashMap::new();
-        let mut strtab_index = objfile.symtab.strtab.len();
+        let symtab_section = &objfile.sections[objfile.symtab];
+        let strtab_section = &objfile.sections[symtab_section.sh_link as usize];
+        let mut strtab_index = strtab_section.data.len();
         let mut new_strtab_data = Vec::new();
 
         // Extract offsets from mdebug section
@@ -538,7 +539,9 @@ fn process_mdebug_symbols(
             assert_eq!(scope_level, 0);
         }
 
-        objfile.symtab.strtab.extend(&new_strtab_data);
+        let symtab_section = &objfile.sections[objfile.symtab];
+        let strtab_section = &mut objfile.sections[symtab_section.sh_link as usize];
+        strtab_section.data.extend(&new_strtab_data);
     }
 
     Ok(new_syms)
@@ -546,11 +549,11 @@ fn process_mdebug_symbols(
 
 fn process_symbols(
     objfile: &mut ElfFile,
-    convert_statics: &str,
-    all_text_glabels: &HashSet<String>,
-    relocated_symbols: &HashSet<Symbol>,
-    func_sizes: &HashMap<String, usize>,
-    moved_late_rodata: &HashMap<usize, usize>,
+    _convert_statics: &str,
+    _all_text_glabels: &HashSet<String>,
+    _relocated_symbols: &HashSet<Symbol>,
+    _func_sizes: &HashMap<String, usize>,
+    _moved_late_rodata: &HashMap<usize, usize>,
 ) -> Result<()> {
     if let Some(symtab) = objfile.find_section_mut(".symtab") {
         let mut new_syms = Vec::new();
@@ -580,7 +583,7 @@ fn process_relocations(
     objfile: &mut ElfFile,
     modified_text_positions: &HashSet<usize>,
     jtbl_rodata_positions: &HashSet<usize>,
-    moved_late_rodata: &HashMap<usize, usize>,
+    _moved_late_rodata: &HashMap<usize, usize>,
 ) -> Result<()> {
     let mut sections_to_process = Vec::new();
     

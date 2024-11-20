@@ -44,6 +44,7 @@ impl From<crate::objfile::ObjFileError> for Error {
             crate::objfile::ObjFileError::SectionError(e) => Error::InvalidSection(e),
             crate::objfile::ObjFileError::SymbolError(e) => Error::InvalidSymbol(e),
             crate::objfile::ObjFileError::RelocationError(e) => Error::InvalidRelocation(e),
+            crate::objfile::ObjFileError::ConversionError(e) => Error::InvalidFormat(e),
         }
     }
 }
