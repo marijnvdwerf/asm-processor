@@ -136,9 +136,9 @@ pub fn fixup_objfile(
     let mut all_late_rodata_dummy_bytes = Vec::new();
     let mut all_jtbl_rodata_size = Vec::new();
     let mut late_rodata_asm = Vec::new();
-    let mut modified_text_positions = HashSet::new();
-    let mut jtbl_rodata_positions = HashSet::new();
-    let mut moved_late_rodata = HashMap::new();
+    let mut modified_text_positions: HashSet<usize> = HashSet::new();
+    let mut jtbl_rodata_positions: HashSet<usize> = HashSet::new();
+    let mut moved_late_rodata: HashMap<usize, usize> = HashMap::new();
     
     // Process each function
     for function in functions {
@@ -146,7 +146,7 @@ pub fn fixup_objfile(
         
         // Check and collect section data
         for (sectype, (temp_name, size)) in &function.data {
-            if let Some(ref temp_name) = temp_name {
+            if let Some(temp_name) = temp_name.as_ref() {
                 if *size == 0 {
                     continue;
                 }
@@ -155,12 +155,12 @@ pub fn fixup_objfile(
                     .ok_or_else(|| ObjFileError::SymbolError(format!("Symbol not found: {}", temp_name)))?;
                 let prev_loc = prev_locs.get(sectype);
                 
-                let loc_usize = loc.1 as usize;
-                if loc_usize < prev_loc {
-                    return Err(ObjFileError::SectionError(
-                        format!("Wrongly computed size for section {} (diff {})", 
-                               sectype, prev_loc - loc_usize)
-                    ));
+                let prev_loc_usize = u32_to_usize(prev_locs.get(sectype))?;
+                let loc_usize = u32_to_usize(loc.1)?;
+                
+                if loc_usize < prev_loc_usize {
+                    return Err(ObjFileError::SectionError(format!(
+                        "Incorrectly computed position for section {}", sectype)));
                 }
                 
                 if loc.1 != prev_loc {
@@ -361,11 +361,13 @@ fn find_bytes_in_section(data: &[u8], pattern: &[u8], start_pos: usize) -> Optio
 
 // Helper functions for type conversions
 fn u32_to_usize(val: u32) -> Result<usize> {
-    usize::try_from(val).map_err(|_| ObjFileError::ConversionError("u32 to usize conversion failed"))
+    usize::try_from(val).map_err(|_| 
+        ObjFileError::ConversionError("u32 to usize conversion failed".to_string()))
 }
 
 fn usize_to_u32(val: usize) -> Result<u32> {
-    u32::try_from(val).map_err(|_| ObjFileError::ConversionError("usize to u32 conversion failed"))
+    u32::try_from(val).map_err(|_| 
+        ObjFileError::ConversionError("usize to u32 conversion failed".to_string()))
 }
 
 /// Helper functions for processing different parts of the object file
@@ -537,7 +539,7 @@ fn process_symbols(
     all_text_glabels: &HashSet<String>,
     relocated_symbols: &HashSet<Symbol>,
     func_sizes: &HashMap<String, usize>,
-    moved_late_rodata: &HashMap<u32, u32>,
+    moved_late_rodata: &HashMap<usize, usize>,
 ) -> Result<()> {
     if let Some(symtab) = objfile.find_section_mut(".symtab") {
         let mut new_syms = Vec::new();
@@ -568,7 +570,7 @@ fn process_relocations(
     objfile: &mut ElfFile,
     modified_text_positions: &HashSet<usize>,
     jtbl_rodata_positions: &HashSet<usize>,
-    moved_late_rodata: &HashMap<u32, u32>,
+    moved_late_rodata: &HashMap<usize, usize>,
 ) -> Result<()> {
     for section in &mut objfile.sections {
         if section.sh_type != SHT_REL && section.sh_type != SHT_RELA {
