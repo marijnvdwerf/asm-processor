@@ -122,8 +122,8 @@ pub fn fixup_objfile(
     let fmt = objfile.fmt.clone();
 
     let mut prev_locs = PrevLocs::default();
-    let mut to_copy: HashMap<&str, Vec<SectionCopyData>> = SECTIONS.iter()
-        .map(|&s| (s, Vec::new()))
+    let mut to_copy: HashMap<String, Vec<SectionCopyData>> = SECTIONS.iter()
+        .map(|&s| (s.to_string(), Vec::new()))
         .collect();
     
     let mut asm = Vec::new();
@@ -170,7 +170,9 @@ pub fn fixup_objfile(
                     }
                 }
                 
-                to_copy.get_mut(sectype).unwrap().push(SectionCopyData {
+                to_copy.get_mut(&sectype.to_string()).ok_or_else(|| {
+                    ObjFileError::SectionError(format!("Invalid section type: {}", sectype))
+                })?.push(SectionCopyData {
                     pos: loc.1 as usize,
                     count: *size,
                     temp_name: temp_name.clone(),
@@ -266,10 +268,8 @@ pub fn fixup_objfile(
             let mut pos = start_pos;
             for (dummy_bytes_list, jtbl_size) in all_late_rodata_dummy_bytes.iter().zip(all_jtbl_rodata_size.iter()) {
                 for (index, dummy_bytes) in dummy_bytes_list.iter().enumerate() {
-                    let mut bytes = dummy_bytes.clone();
-                    if !fmt.is_big_endian {
-                        bytes.reverse();
-                    }
+                    let mut bytes = Vec::from(*dummy_bytes);
+                    bytes.reverse();
                     
                     if let Some(target) = objfile.find_section(".rodata") {
                         if let Some(found_pos) = find_bytes_in_section(&target.data, &bytes, prev_locs.rodata) {
@@ -352,22 +352,28 @@ fn find_bytes_in_section(data: &[u8], pattern: &[u8], start_pos: usize) -> Optio
         .map(|pos| pos + start_pos)
 }
 
+// Helper functions for type conversions
+fn u32_to_usize(val: u32) -> Result<usize> {
+    usize::try_from(val).map_err(|_| ObjFileError::ConversionError("u32 to usize conversion failed"))
+}
+
+fn usize_to_u32(val: usize) -> Result<u32> {
+    u32::try_from(val).map_err(|_| ObjFileError::ConversionError("usize to u32 conversion failed"))
+}
+
 /// Helper functions for processing different parts of the object file
 fn process_sections(
     objfile: &mut ElfFile,
-    to_copy: &HashMap<&str, Vec<SectionCopyData>>,
+    to_copy: &HashMap<String, Vec<SectionCopyData>>,
     _all_text_glabels: &HashSet<String>,
 ) -> Result<()> {
-    let mut modified_text_positions = HashSet::new();
-    let mut jtbl_rodata_positions = HashSet::new();
-    let mut last_rodata_pos = 0;
-
-    for &sectype in SECTIONS {
-        if to_copy[sectype].is_empty() {
+    for sectype in SECTIONS {
+        let sectype = sectype.to_string();
+        if to_copy[&sectype].is_empty() {
             continue;
         }
 
-        let source = objfile.find_section(sectype)
+        let source = objfile.find_section(sectype.as_str())
             .ok_or_else(|| ObjFileError::SectionError(format!("Section not found: {}", sectype)))?;
 
         // Skip .bss section as it contains no data
@@ -375,39 +381,33 @@ fn process_sections(
             continue;
         }
 
-        let target = objfile.find_section(sectype)
+        let target = objfile.find_section(sectype.as_str())
             .ok_or_else(|| ObjFileError::SectionError(format!("Target section not found: {}", sectype)))?;
 
         let mut data = target.data.clone();
-        for copy_data in &to_copy[sectype] {
+        for copy_data in &to_copy[&sectype] {
             let start_sym = format!("{}_asm_start", copy_data.temp_name);
             let end_sym = format!("{}_asm_end", copy_data.temp_name);
 
-            let loc1 = objfile.find_symbol_in_section(&start_sym, source)
-                .ok_or_else(|| ObjFileError::SymbolError(format!("Symbol not found: {}", start_sym)))?;
-            let loc2 = objfile.find_symbol_in_section(&end_sym, source)
-                .ok_or_else(|| ObjFileError::SymbolError(format!("Symbol not found: {}", end_sym)))?;
+            let loc1 = objfile.find_symbol_in_section(&start_sym, source)?;
+            let loc2 = objfile.find_symbol_in_section(&end_sym, source)?;
 
-            if loc2 - loc1 != copy_data.count as u32 {
+            if loc2 - loc1 != usize_to_u32(copy_data.count)? {
                 return Err(ObjFileError::SectionError(
                     format!("Incorrectly computed size for section {}, {}", sectype, copy_data.fn_desc)
                 ));
             }
 
+            let start = u32_to_usize(loc1)?;
+            let end = u32_to_usize(loc2)?;
             data[copy_data.pos..copy_data.pos + copy_data.count]
-                .copy_from_slice(&source.data[loc1 as usize..loc2 as usize]);
-
-            if sectype == ".text" {
-                for i in 0..copy_data.count / 4 {
-                    modified_text_positions.insert(copy_data.pos + 4 * i);
-                }
-            } else if sectype == ".rodata" {
-                last_rodata_pos = copy_data.pos + copy_data.count;
-            }
+                .copy_from_slice(&source.data[start..end]);
         }
 
         // Update section data
-        objfile.sections[target.index].data = data;
+        if let Some(section) = objfile.find_section(sectype.as_str()) {
+            section.data = data;
+        }
     }
 
     Ok(())
@@ -488,14 +488,14 @@ fn process_mdebug_symbols(
                     };
                     
                     let sym = Symbol::from_parts(
-                        &objfile.fmt,
+                        objfile.fmt.clone(),
                         strtab_index,
                         value,
                         0,
                         (binding << 4) | symtype,
                         STV_DEFAULT,
                         section.index as u16,
-                        &objfile.symtab.strtab,
+                        &objfile.sections[objfile.symtab].data,
                         emitted_name.clone(),
                     )?;
                     
@@ -530,73 +530,28 @@ fn process_symbols(
     relocated_symbols: &HashSet<Symbol>,
     func_sizes: &HashMap<String, usize>,
     moved_late_rodata: &HashMap<u32, u32>,
-) -> Result<HashSet<Symbol>> {
-    let empty_symbol = objfile.symtab.symbol_entries[0].clone();
-    let mut new_syms = vec![empty_symbol];
-    
-    // Add non-temporary symbols from original file
-    new_syms.extend(
-        objfile.symtab.symbol_entries[1..]
-            .iter()
-            .filter(|s| !is_temp_name(&s.name))
-            .cloned()
-    );
-    
-    // Process mdebug symbols if needed
-    let mut mdebug_syms = process_mdebug_symbols(objfile, convert_statics, objfile.name)?;
-    new_syms.append(&mut mdebug_syms);
-    
-    // Handle duplicate symbols
-    new_syms.sort_by_key(|s| (s.st_shndx != SHN_UNDEF, s.name == "_gp_disp"));
-    
-    let mut name_to_sym = HashMap::new();
-    let mut final_syms = Vec::new();
-    final_syms.push(empty_symbol);
-    
-    for sym in new_syms {
-        if sym.name == "_gp_disp" {
-            sym.set_type(STT_OBJECT);
-        }
+) -> Result<()> {
+    if let Some(symtab) = objfile.find_section(".symtab") {
+        let mut new_syms = Vec::new();
         
-        if sym.bind == STB_LOCAL && sym.st_shndx == SHN_UNDEF {
-            return Err(ObjFileError::SymbolError(
-                format!("local symbol \"{}\" is undefined", sym.name)
-            ));
-        }
-        
-        if sym.name.is_empty() {
-            if sym.bind != STB_LOCAL {
-                return Err(ObjFileError::SymbolError("global symbol with no name".to_string()));
+        // Process existing symbols
+        for symbol in symtab.symbol_entries() {
+            if !is_temp_name(&symbol.name) {
+                new_syms.push(symbol.clone());
             }
-            final_syms.push(sym);
-            continue;
         }
-        
-        if let Some(existing) = name_to_sym.get(&sym.name) {
-            if sym.st_shndx != SHN_UNDEF && !(
-                existing.st_shndx == sym.st_shndx && existing.st_value == sym.st_value
-            ) {
-                return Err(ObjFileError::SymbolError(
-                    format!("symbol \"{}\" defined twice", sym.name)
-                ));
-            }
-            sym.replace_by(existing);
-        } else {
-            name_to_sym.insert(sym.name.clone(), sym.clone());
-            final_syms.push(sym);
+
+        // Sort symbols
+        new_syms.sort_by_key(|s| (!s.is_local(), s.name == "_gp_disp"));
+
+        // Update symbol table
+        if let Some(symtab) = objfile.find_section(".symtab") {
+            symtab.data = new_syms.iter().flat_map(|s| s.to_bin()).collect();
+            symtab.sh_info = new_syms.iter().filter(|s| s.is_local()).count() as u32;
         }
     }
-    
-    // Update symbol table
-    let num_local_syms = final_syms.iter().filter(|s| s.bind == STB_LOCAL).count();
-    for (i, sym) in final_syms.iter_mut().enumerate() {
-        sym.set_new_index(i);
-    }
-    
-    objfile.symtab.data = final_syms.iter().flat_map(|s| s.to_bin()).collect();
-    objfile.symtab.sh_info = num_local_syms as u32;
-    
-    Ok(final_syms.iter().cloned().collect())
+
+    Ok(())
 }
 
 fn process_relocations(
@@ -605,43 +560,27 @@ fn process_relocations(
     jtbl_rodata_positions: &HashSet<usize>,
     moved_late_rodata: &HashMap<u32, u32>,
 ) -> Result<()> {
-    // Process both REL and RELA sections
     for section in &mut objfile.sections {
         if section.sh_type != SHT_REL && section.sh_type != SHT_RELA {
             continue;
         }
-        
+
         let target_section = objfile.sections.get(section.sh_info as usize)
             .ok_or_else(|| ObjFileError::SectionError("Invalid relocation target section".to_string()))?;
-        
-        let mut relocs = section.relocs()
-            .into_iter()
-            .filter(|rel| {
-                let offset = rel.r_offset as usize;
-                !(target_section.name == ".text" && modified_text_positions.contains(&offset) ||
-                  target_section.name == ".rodata" && jtbl_rodata_positions.contains(&offset))
-            })
-            .map(|mut rel| {
-                if let Some(sym) = objfile.get_symbol(rel.sym_index) {
-                    rel.sym_index = sym.new_index();
-                }
-                
-                if target_section.name == ".late_rodata" {
-                    if let Some(&new_offset) = moved_late_rodata.get(&rel.r_offset) {
-                        rel.r_offset = new_offset;
-                    }
-                }
-                
-                rel
-            })
-            .collect::<Vec<_>>();
-        
+
+        let mut relocs = section.relocations.clone();
+        relocs.retain(|rel| {
+            let offset = u32_to_usize(rel.r_offset).unwrap_or(0);
+            !(target_section.name == ".text" && modified_text_positions.contains(&offset) ||
+              target_section.name == ".rodata" && jtbl_rodata_positions.contains(&offset))
+        });
+
         // Sort relocations by offset
         relocs.sort_by_key(|rel| rel.r_offset);
-        
-        // Update relocation section data
+
+        // Update section data
         section.data = relocs.iter().flat_map(|rel| rel.to_bin()).collect();
     }
-    
+
     Ok(())
 }
