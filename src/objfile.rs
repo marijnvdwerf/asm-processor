@@ -283,7 +283,7 @@ pub fn fixup_objfile(
             let mut pos = start_pos;
             for (dummy_bytes_list, jtbl_size) in all_late_rodata_dummy_bytes.iter().zip(all_jtbl_rodata_size.iter()) {
                 for (index, dummy_bytes) in dummy_bytes_list.iter().enumerate() {
-                    let mut bytes = Vec::from(*dummy_bytes);
+                    let mut bytes = Vec::from(dummy_bytes.as_bytes());
                     bytes.reverse();
                     
                     if let Some(target) = objfile.find_section(".rodata") {
@@ -336,7 +336,7 @@ pub fn fixup_objfile(
     process_sections(&mut objfile, &to_copy, &all_text_glabels)?;
     
     // Handle reginfo section merging
-    if let Some(target_reginfo) = objfile.find_section(".reginfo") {
+    if let Some(target_reginfo) = objfile.find_section_mut(".reginfo") {
         if let Some(source_reginfo) = asm_objfile.find_section(".reginfo") {
             let mut data = target_reginfo.data.clone();
             for i in 0..20 {
@@ -540,9 +540,11 @@ fn process_mdebug_symbols(
             assert_eq!(scope_level, 0);
         }
 
-        let symtab_section = &objfile.sections[objfile.symtab];
-        let strtab_section = &mut objfile.sections[symtab_section.sh_link as usize];
-        strtab_section.data.extend(&new_strtab_data);
+        let strtab_idx = {
+            let symtab_section = &objfile.sections[objfile.symtab];
+            symtab_section.sh_link as usize
+        };
+        objfile.sections[strtab_idx].data.extend(&new_strtab_data);
     }
 
     Ok(new_syms)
