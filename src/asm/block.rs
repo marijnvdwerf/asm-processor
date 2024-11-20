@@ -317,7 +317,7 @@ impl GlobalAsmBlock {
         Ok(())
     }
 
-    pub fn finish(mut self, _state: &mut GlobalState) -> Result<(Vec<String>, Function)> {
+    pub fn finish(mut self, state: &mut GlobalState) -> Result<(Vec<String>, Function)> {
         if self.cur_section == ".text" && self.text_glabels.is_empty() {
             return Err(self.fail("no function labels found", None));
         }
@@ -327,11 +327,32 @@ impl GlobalAsmBlock {
         let mut jtbl_rodata_size = 0;
         let mut data = HashMap::new();
 
-        if !self.late_rodata_asm_conts.is_empty() {
-            if self.text_glabels.len() > 1 {
-                return Err(self.fail("multiple text labels with .late_rodata not supported", None));
-            }
+        // Convert assembly to C array declarations
+        let mut output = Vec::new();
+        
+        // Handle rodata section
+        if self.fn_section_sizes[".rodata"] > 0 {
+            let rodata_name = format!("_asmpp_rodata{}", state.get_next_id());
+            output.push(format!(" const char {}[{}] = {{1}};", rodata_name, self.fn_section_sizes[".rodata"]));
+            data.insert(".rodata".to_string(), (rodata_name, self.fn_section_sizes[".rodata"]));
+        }
 
+        // Handle data section
+        if self.fn_section_sizes[".data"] > 0 {
+            let data_name = format!("_asmpp_data{}", state.get_next_id());
+            output.push(format!(" char {}[{}] = {{1}};", data_name, self.fn_section_sizes[".data"]));
+            data.insert(".data".to_string(), (data_name, self.fn_section_sizes[".data"]));
+        }
+
+        // Handle bss section
+        if self.fn_section_sizes[".bss"] > 0 {
+            let bss_name = format!("_asmpp_bss{}", state.get_next_id());
+            output.push(format!(" char {}[{}];", bss_name, self.fn_section_sizes[".bss"]));
+            data.insert(".bss".to_string(), (bss_name, self.fn_section_sizes[".bss"]));
+        }
+
+        // Handle late rodata
+        if !self.late_rodata_asm_conts.is_empty() {
             for cont in &self.late_rodata_asm_conts {
                 if cont.contains(".late_rodata_alignment") {
                     continue;
@@ -349,22 +370,9 @@ impl GlobalAsmBlock {
             }
         }
 
-        let text_size = self.fn_section_sizes[".text"];
-        if text_size > MAX_FN_SIZE {
-            return Err(self.fail(&format!("function too big ({} > {})", text_size, MAX_FN_SIZE), None));
-        }
-
-        // Add function to state's functions map
-        for (label, size) in self.fn_section_sizes.iter() {
-            if *size > 0 {
-                data.insert(label.clone(), (self.fn_desc.clone(), *size));
-            }
-        }
-
-        let asm_conts = std::mem::take(&mut self.asm_conts);
-        Ok((asm_conts.clone(), Function {
+        Ok((output, Function {
             text_glabels: self.text_glabels,
-            asm_conts,
+            asm_conts: self.asm_conts,
             late_rodata_dummy_bytes,
             jtbl_rodata_size,
             late_rodata_asm_conts,

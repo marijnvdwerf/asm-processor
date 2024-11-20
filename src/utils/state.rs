@@ -84,7 +84,12 @@ impl GlobalState {
 
     pub fn make_name(&mut self, cat: &str) -> String {
         self.namectr += 1;
-        format!("_asmpp_{}{}", cat, self.namectr)
+        format!("{}_{}", cat, self.namectr)
+    }
+
+    pub fn get_next_id(&mut self) -> u32 {
+        self.namectr += 1;
+        self.namectr
     }
 
     pub fn func_prologue(&self, name: &str) -> String {

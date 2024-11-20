@@ -143,11 +143,7 @@ pub fn run<W: std::io::Write>(args: &Args, outfile: Option<&mut W>) -> Result<Op
         let mut deps = Vec::new();
         let file = File::open(&args.filename)?;
         let mut reader = BufReader::new(file);
-        let functions = if args.post_process.is_some() {
-            Vec::new()
-        } else {
-            parse_source(&mut reader, &opts, &mut deps, outfile)?
-        };
+        let functions = parse_source(&mut reader, &opts, &mut deps, outfile)?;
         
         return Ok(Some(ProcessorOutput {
             functions,
@@ -161,7 +157,10 @@ pub fn run<W: std::io::Write>(args: &Args, outfile: Option<&mut W>) -> Result<Op
         .ok_or_else(|| Error::InvalidInput("must pass assembler command".into()))?;
 
     let mut deps = Vec::new();
-    let functions = {
+    let functions = if args.post_process.is_some() {
+        // When post-processing, we don't need to parse the source again
+        Vec::new()
+    } else {
         let file = File::open(&args.filename)?;
         let mut reader = BufReader::new(file);
         parse_source(&mut reader, &opts, &mut deps, outfile)?

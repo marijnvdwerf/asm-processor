@@ -29,30 +29,22 @@ fn parse_args() -> BuildConfig {
     let sep1 = args.iter()
         .position(|arg| arg == "--")
         .expect("No first -- separator found");
-    println!("sep1: {}", sep1);
 
     let sep0 = args[..sep1].iter()
         .position(|arg| !arg.starts_with('-'))
         .unwrap_or(sep1);
-    println!("sep0: {}", sep0);
 
     let sep2 = args.iter()
         .skip(sep1 + 1)
         .position(|arg| arg == "--")
         .map(|pos| pos + sep1 + 1)
         .expect("No second -- separator found");
-    println!("sep2: {}", sep2);
 
     // Split arguments into their respective groups
     let mut asmproc_flags = args[..sep0].to_vec();
     let compiler = args[sep0..sep1].to_vec();
     let assembler_args = args[sep1 + 1..sep2].to_vec();
     let mut compile_args = args[sep2 + 1..].to_vec();
-
-    println!("asmproc_flags: {:?}", asmproc_flags);
-    println!("compiler: {:?}", compiler);
-    println!("assembler_args: {:?}", assembler_args);
-    println!("compile_args: {:?}", compile_args);
 
     // Extract output file
     let out_ind = compile_args.iter()
