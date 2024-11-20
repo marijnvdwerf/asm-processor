@@ -5,6 +5,8 @@ use crate::asm::function::Function;
 use crate::utils::constants::MAX_FN_SIZE;
 use lazy_static::lazy_static;
 use regex::Regex;
+use encoding_rs::Encoding;
+use std::convert::TryFrom;
 
 lazy_static! {
     static ref RE_COMMENT_OR_STRING: Regex = Regex::new(
@@ -68,8 +70,13 @@ impl GlobalAsmBlock {
         Error::AssemblyProcessing(format!("{}\nwithin {}", message, context))
     }
 
-    fn count_quoted_size(&self, line: &str, z: bool, real_line: &str, _output_enc: &str) -> Result<usize> {
-        // For now, we'll handle UTF-8 only. We can add output_enc support later if needed
+    fn count_quoted_size(&self, line: &str, z: bool, real_line: &str, output_enc: &str) -> Result<usize> {
+        // Handle output encoding properly
+        let enc = Encoding::for_label(output_enc)
+            .ok_or_else(|| Error::AssemblyProcessing("Invalid encoding".into()))?;
+        let (encoded, _, _) = enc.encode(line);
+        let line = String::from_utf8_lossy(&encoded);
+        
         let mut in_quote = false;
         let mut has_comma = true;
         let mut num_parts = 0;
@@ -292,6 +299,16 @@ impl GlobalAsmBlock {
             let z = line.starts_with(".asciz") || line.starts_with(".asciiz");
             let size = self.count_quoted_size(&line, z, &real_line, output_enc)?;
             self.add_sized(size as isize, &real_line)?;
+        } else if line.starts_with(".byte") {
+            self.add_sized(line.split(',').count() as isize, &real_line)?;
+        } else if line.starts_with(".half") || line.starts_with(".hword") || line.starts_with(".short") {
+            self.align2();
+            self.add_sized(2 * line.split(',').count() as isize, &real_line)?;
+        } else if line.starts_with(".size") {
+            // Ignore .size directives
+        } else if line.starts_with(".") {
+            // .macro, ...
+            return Err(self.fail("asm directive not supported", Some(&real_line)));
         } else {
             // Instruction or macro
             if self.cur_section != ".text" {
@@ -326,48 +343,180 @@ impl GlobalAsmBlock {
         let mut late_rodata_asm_conts = Vec::new();
         let mut jtbl_rodata_size = 0;
         let mut data = HashMap::new();
+        let mut text_name = None;
 
-        // Convert assembly to C array declarations
-        let mut output = Vec::new();
-        
-        // Handle rodata section
-        if self.fn_section_sizes[".rodata"] > 0 {
-            let rodata_name = format!("_asmpp_rodata{}", state.get_next_id());
-            output.push(format!(" const char {}[{}] = {{1}};", rodata_name, self.fn_section_sizes[".rodata"]));
-            data.insert(".rodata".to_string(), (rodata_name, self.fn_section_sizes[".rodata"]));
-        }
+        // Handle text section and late rodata
+        if self.fn_section_sizes[".text"] > 0 || !self.late_rodata_asm_conts.is_empty() {
+            let instr_count = self.fn_section_sizes[".text"] / 4;
+            let mut tot_emitted = 0;
+            let mut tot_skipped = 0;
+            let mut fn_emitted = 0;
+            let mut fn_skipped = 0;
+            let mut skipping = true;
 
-        // Handle data section
-        if self.fn_section_sizes[".data"] > 0 {
-            let data_name = format!("_asmpp_data{}", state.get_next_id());
-            output.push(format!(" char {}[{}] = {{1}};", data_name, self.fn_section_sizes[".data"]));
-            data.insert(".data".to_string(), (data_name, self.fn_section_sizes[".data"]));
-        }
+            for (line_no, count) in &self.fn_ins_inds {
+                for _ in 0..*count {
+                    if fn_emitted > MAX_FN_SIZE && 
+                       instr_count - tot_emitted > state.min_instr_count() {
+                        // Reset counters when function gets too large
+                        fn_emitted = 0;
+                        fn_skipped = 0;
+                        skipping = true;
+                    }
 
-        // Handle bss section
-        if self.fn_section_sizes[".bss"] > 0 {
-            let bss_name = format!("_asmpp_bss{}", state.get_next_id());
-            output.push(format!(" char {}[{}];", bss_name, self.fn_section_sizes[".bss"]));
-            data.insert(".bss".to_string(), (bss_name, self.fn_section_sizes[".bss"]));
-        }
-
-        // Handle late rodata
-        if !self.late_rodata_asm_conts.is_empty() {
-            for cont in &self.late_rodata_asm_conts {
-                if cont.contains(".late_rodata_alignment") {
-                    continue;
-                }
-                if cont.contains(".align") {
-                    continue;
-                }
-                if cont.starts_with(".word") {
-                    jtbl_rodata_size += 4;
-                } else if cont.starts_with(".") {
-                    late_rodata_dummy_bytes.push(cont.clone());
-                } else {
-                    late_rodata_asm_conts.push(cont.clone());
+                    if skipping && fn_skipped < state.skip_instr_count() {
+                        fn_skipped += 1;
+                        tot_skipped += 1;
+                    } else {
+                        skipping = false;
+                        tot_emitted += 1;
+                        fn_emitted += 1;
+                    }
                 }
             }
+
+            // Check late rodata ratio
+            if !self.late_rodata_asm_conts.is_empty() {
+                let size = self.late_rodata_asm_conts.len() / 3;
+                let available = instr_count - tot_skipped;
+                if size * 3 > available {
+                    return Err(self.fail(
+                        &format!(
+                            "late rodata to text ratio is too high: {} / {} must be <= 1/3\n\
+                             add .late_rodata_alignment (4|8) to the .late_rodata block to double the allowed ratio.",
+                            size, available
+                        ),
+                        None
+                    ));
+                }
+            }
+        }
+
+        let mut late_rodata_fn_output = Vec::new();
+        if self.fn_section_sizes[".late_rodata"] > 0 {
+            let size = self.fn_section_sizes[".late_rodata"] / 4;
+            let mut skip_next = false;
+            let mut needs_double = self.late_rodata_alignment != 0;
+            let mut extra_mips1_nop = false;
+
+            // Pascal vs C-specific sizes
+            let (jtbl_size, jtbl_min_rodata_size) = if state.pascal {
+                (if state.mips1 { 9 } else { 8 }, 2)
+            } else {
+                (if state.mips1 { 11 } else { 9 }, 5)
+            };
+
+            for i in 0..size {
+                if skip_next {
+                    skip_next = false;
+                    continue;
+                }
+
+                if !needs_double && state.use_jtbl_for_rodata && i >= 1 
+                   && size - i >= jtbl_min_rodata_size 
+                   && num_instr - late_rodata_fn_output.len() >= jtbl_size + 1 {
+                    // Generate jump table
+                    let line = if state.pascal {
+                        let cases = (0..size-i)
+                            .map(|case| format!("{}: ;", case))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        format!("case 0 of {} otherwise end;", cases)
+                    } else {
+                        let cases = (0..size-i)
+                            .map(|case| format!("case {}:", case))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        format!("switch (*(volatile int*)0) {{ {} ; }}", cases)
+                    };
+                    late_rodata_fn_output.push(line);
+                    late_rodata_fn_output.extend(vec![String::new(); jtbl_size - 1]);
+                    jtbl_rodata_size = (size - i) * 4;
+                    extra_mips1_nop = i != 2;
+                    break;
+                }
+
+                // Handle doubles and floats with MIPS1 considerations
+                let dummy_bytes = state.next_late_rodata_hex();
+                late_rodata_dummy_bytes.push(dummy_bytes.clone());
+
+                if self.late_rodata_alignment == 4 * ((i + 1) % 2 + 1) && i + 1 < size {
+                    // Double handling
+                    let dummy_bytes2 = state.next_late_rodata_hex();
+                    late_rodata_dummy_bytes.push(dummy_bytes2.clone());
+                    let combined = [dummy_bytes, dummy_bytes2].concat();
+                    let fval = f64::from_be_bytes(combined.try_into().unwrap());
+                    
+                    let line = if state.pascal {
+                        state.pascal_assignment("d", &fval.to_string())
+                    } else {
+                        format!("*(volatile double*)0 = {};", fval)
+                    };
+                    late_rodata_fn_output.push(line);
+                    skip_next = true;
+                    needs_double = false;
+                    
+                    if state.mips1 {
+                        // MIPS1 doesn't have ldc1/sdc1
+                        late_rodata_fn_output.extend(vec![String::new(); 2]);
+                    }
+                    extra_mips1_nop = false;
+                } else {
+                    // Float handling
+                    let fval = f32::from_be_bytes(dummy_bytes.try_into().unwrap());
+                    let line = if state.pascal {
+                        state.pascal_assignment("f", &fval.to_string())
+                    } else {
+                        format!("*(volatile float*)0 = {}f;", fval)
+                    };
+                    late_rodata_fn_output.push(line);
+                    extra_mips1_nop = true;
+                }
+                late_rodata_fn_output.extend(vec![String::new(); 2]);
+            }
+
+            if state.mips1 && extra_mips1_nop {
+                late_rodata_fn_output.push(String::new());
+            }
+        }
+
+        // Handle section-specific names and declarations
+        let mut output = Vec::new();
+        
+        if self.fn_section_sizes[".rodata"] > 0 {
+            if state.pascal {
+                return Err(self.fail(".rodata isn't supported with Pascal for now", None));
+            }
+            let rodata_name = format!("_asmpp_rodata{}", state.get_next_id());
+            output.push(format!(" const char {}[{}] = {{1}};", 
+                rodata_name, self.fn_section_sizes[".rodata"]));
+            data.insert(".rodata".to_string(), 
+                (rodata_name, self.fn_section_sizes[".rodata"]));
+        }
+
+        if self.fn_section_sizes[".data"] > 0 {
+            let data_name = format!("_asmpp_data{}", state.get_next_id());
+            let line = if state.pascal {
+                format!(" var {}: packed array[1..{}] of char := [otherwise: 0];",
+                    data_name, self.fn_section_sizes[".data"])
+            } else {
+                format!(" char {}[{}] = {{1}};",
+                    data_name, self.fn_section_sizes[".data"])
+            };
+            output.push(line);
+            data.insert(".data".to_string(), 
+                (data_name, self.fn_section_sizes[".data"]));
+        }
+
+        if self.fn_section_sizes[".bss"] > 0 {
+            if state.pascal {
+                return Err(self.fail(".bss isn't supported with Pascal", None));
+            }
+            let bss_name = format!("_asmpp_bss{}", state.get_next_id());
+            output.push(format!(" char {}[{}];",
+                bss_name, self.fn_section_sizes[".bss"]));
+            data.insert(".bss".to_string(),
+                (bss_name, self.fn_section_sizes[".bss"]));
         }
 
         Ok((output, Function {
