@@ -42,6 +42,10 @@ pub enum ObjFileError {
     /// Errors related to relocation processing
     #[error("Relocation error: {0}")]
     RelocationError(String),
+    
+    /// Conversion errors
+    #[error("Conversion error: {0}")]
+    ConversionError(String),
 }
 
 impl From<CrateError> for ObjFileError {
@@ -67,14 +71,14 @@ struct SectionCopyData {
 
 #[derive(Default, Debug)]
 struct PrevLocs {
-    text: usize,
-    data: usize,
-    rodata: usize,
-    bss: usize,
+    text: u32,
+    data: u32,
+    rodata: u32,
+    bss: u32,
 }
 
 impl PrevLocs {
-    fn get(&self, section: &str) -> usize {
+    fn get(&self, section: &str) -> u32 {
         match section {
             ".text" => self.text,
             ".data" => self.data,
@@ -84,7 +88,7 @@ impl PrevLocs {
         }
     }
 
-    fn set(&mut self, section: &str, value: usize) {
+    fn set(&mut self, section: &str, value: u32) {
         match section {
             ".text" => self.text = value,
             ".data" => self.data = value,
@@ -142,7 +146,7 @@ pub fn fixup_objfile(
         
         // Check and collect section data
         for (sectype, (temp_name, size)) in &function.data {
-            if let Some(temp_name) = temp_name {
+            if let Some(ref temp_name) = temp_name {
                 if *size == 0 {
                     continue;
                 }
@@ -162,7 +166,8 @@ pub fn fixup_objfile(
                 if loc.1 != prev_loc {
                     asm.push(format!(".section {}", sectype));
                     if sectype == ".text" {
-                        for _ in 0..((loc.1 - prev_loc) / 4) {
+                        let nops = ((loc.1 - prev_loc) / 4) as usize;
+                        for _ in 0..nops {
                             asm.push("nop".to_string());
                         }
                     } else {
@@ -183,7 +188,9 @@ pub fn fixup_objfile(
                     func_sizes.insert(function.text_glabels[0].clone(), *size);
                 }
                 
-                prev_locs.set(sectype, loc.1 + size);
+                let size_u32: u32 = (*size).try_into().map_err(|_| 
+                    ObjFileError::ConversionError("size conversion failed".to_string()))?;
+                prev_locs.set(sectype, loc.1 + size_u32);
             }
         }
         
@@ -405,7 +412,7 @@ fn process_sections(
         }
 
         // Update section data
-        if let Some(section) = objfile.find_section(sectype.as_str()) {
+        if let Some(section) = objfile.find_section_mut(sectype.as_str()) {
             section.data = data;
         }
     }
@@ -427,23 +434,24 @@ fn process_mdebug_symbols(
         let mut new_strtab_data = Vec::new();
 
         // Extract offsets from mdebug section
-        let (ifd_max, cb_fd_offset) = objfile.fmt.unpack_u32_pair(&mdebug_section.data[18*4..20*4]);
-        let cb_sym_offset = objfile.fmt.unpack_u32(&mdebug_section.data[9*4..10*4]);
-        let cb_ss_offset = objfile.fmt.unpack_u32(&mdebug_section.data[15*4..16*4]);
+        let ifd_max = objfile.fmt.unpack_u32(&mdebug_section.data[18*4..19*4])?;
+        let cb_fd_offset = objfile.fmt.unpack_u32(&mdebug_section.data[19*4..20*4])?;
+        let cb_sym_offset = objfile.fmt.unpack_u32(&mdebug_section.data[9*4..10*4])?;
+        let cb_ss_offset = objfile.fmt.unpack_u32(&mdebug_section.data[15*4..16*4])?;
 
         // Process each symbol
         for i in 0..ifd_max {
-            let offset = cb_fd_offset + 18*4*i;
-            let (iss_base, _, isym_base, csym) = objfile.fmt.unpack_u32_quad(
-                &objfile.data[offset + 2*4..offset + 6*4]
-            );
+            let offset = (cb_fd_offset + 18*4*i) as usize;
+            let iss_base = objfile.fmt.unpack_u32(&mdebug_section.data[offset + 2*4..offset + 3*4])?;
+            let isym_base = objfile.fmt.unpack_u32(&mdebug_section.data[offset + 4*4..offset + 5*4])?;
+            let csym = objfile.fmt.unpack_u32(&mdebug_section.data[offset + 5*4..offset + 6*4])?;
 
             let mut scope_level = 0;
             for j in 0..csym {
-                let offset2 = cb_sym_offset + 12 * (isym_base + j);
-                let (iss, value, st_sc_index) = objfile.fmt.unpack_u32_triple(
-                    &objfile.data[offset2..offset2 + 12]
-                );
+                let offset2 = (cb_sym_offset + 12 * (isym_base + j)) as usize;
+                let iss = objfile.fmt.unpack_u32(&mdebug_section.data[offset2..offset2 + 4])?;
+                let value = objfile.fmt.unpack_u32(&mdebug_section.data[offset2 + 4..offset2 + 8])?;
+                let st_sc_index = objfile.fmt.unpack_u32(&mdebug_section.data[offset2 + 8..offset2 + 12])?;
 
                 let st = st_sc_index >> 26;
                 let sc = (st_sc_index >> 21) & 0x1f;
@@ -531,24 +539,26 @@ fn process_symbols(
     func_sizes: &HashMap<String, usize>,
     moved_late_rodata: &HashMap<u32, u32>,
 ) -> Result<()> {
-    if let Some(symtab) = objfile.find_section(".symtab") {
+    if let Some(symtab) = objfile.find_section_mut(".symtab") {
         let mut new_syms = Vec::new();
         
         // Process existing symbols
-        for symbol in symtab.symbol_entries() {
+        for symbol in &symtab.symbol_entries {
             if !is_temp_name(&symbol.name) {
                 new_syms.push(symbol.clone());
             }
         }
 
         // Sort symbols
-        new_syms.sort_by_key(|s| (!s.is_local(), s.name == "_gp_disp"));
+        new_syms.sort_by_key(|s| (!s.bind() == STB_LOCAL, s.name.clone() == "_gp_disp"));
 
         // Update symbol table
-        if let Some(symtab) = objfile.find_section(".symtab") {
-            symtab.data = new_syms.iter().flat_map(|s| s.to_bin()).collect();
-            symtab.sh_info = new_syms.iter().filter(|s| s.is_local()).count() as u32;
-        }
+        symtab.data = new_syms.iter()
+            .flat_map(|s| s.to_bin().unwrap_or_default())
+            .collect();
+        symtab.sh_info = new_syms.iter()
+            .filter(|s| s.bind() == STB_LOCAL)
+            .count() as u32;
     }
 
     Ok(())
@@ -579,7 +589,9 @@ fn process_relocations(
         relocs.sort_by_key(|rel| rel.r_offset);
 
         // Update section data
-        section.data = relocs.iter().flat_map(|rel| rel.to_bin()).collect();
+        section.data = relocs.iter()
+            .flat_map(|r| r.to_bin().unwrap_or_default())
+            .collect();
     }
 
     Ok(())
