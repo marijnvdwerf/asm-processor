@@ -18,6 +18,9 @@ use crate::elf::file::ElfFile;
 use crate::utils::Error as CrateError;
 use crate::asm::Function;
 use crate::elf::Relocation;
+use crate::elf::section::ElfSection;
+use crate::elf::symbol::Symbol;
+use std::hash::{Hash, Hasher};
 
 const SECTIONS: &[&str] = &[".data", ".text", ".rodata", ".bss"];
 
@@ -509,7 +512,7 @@ fn process_mdebug_symbols(
                         (binding << 4) | symtype,
                         STV_DEFAULT,
                         section.index as u16,
-                        &objfile.sections[objfile.symtab].data,
+                        section,
                         emitted_name.clone(),
                     )?;
                     
@@ -595,7 +598,7 @@ fn process_relocations(
 
         // Update section data
         section.data = relocs.iter()
-            .flat_map(|r| r.to_bytes())
+            .flat_map(|r| r.to_bytes(&section.fmt))
             .collect();
     }
 
@@ -629,14 +632,20 @@ impl ElfFile {
 }
 
 impl Relocation {
-    fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(8);
-        bytes.extend_from_slice(&self.r_offset.to_le_bytes());
-        bytes.extend_from_slice(&self.r_info.to_le_bytes());
-        bytes
-    }
-
     fn get_sym_index(&self) -> u32 {
         self.r_info >> 8
     }
 }
+
+impl Hash for Symbol {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.st_value.hash(state);
+        self.st_size.hash(state);
+        self.st_info.hash(state);
+        self.st_other.hash(state);
+        self.st_shndx.hash(state);
+    }
+}
+
+impl Eq for Symbol {}
