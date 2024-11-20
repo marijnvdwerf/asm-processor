@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::path::Path;
 use tempfile::NamedTempFile;
@@ -10,7 +11,7 @@ use crate::elf::{
         MIPS_DEBUG_ST_STRUCT, MIPS_DEBUG_ST_UNION, MIPS_DEBUG_ST_ENUM,
         MIPS_DEBUG_ST_BLOCK, MIPS_DEBUG_ST_PROC, MIPS_DEBUG_ST_END,
         STT_FUNC, STT_OBJECT, STB_LOCAL, STB_GLOBAL, STV_DEFAULT,
-        SHN_UNDEF, SHT_REL, SHT_RELA
+        SHT_REL, SHT_RELA
     }
 };
 
@@ -19,8 +20,6 @@ use crate::utils::Error as CrateError;
 use crate::asm::Function;
 use crate::elf::Relocation;
 use crate::elf::section::ElfSection;
-use crate::elf::symbol::Symbol;
-use std::hash::{Hash, Hasher};
 
 const SECTIONS: &[&str] = &[".data", ".text", ".rodata", ".bss"];
 
@@ -148,9 +147,12 @@ pub fn fixup_objfile(
     for function in functions {
         let mut ifdefed = false;
         
-        // Check and collect section data
-        for (sectype, (temp_name, size)) in &function.data {
-            if let Some(temp_name) = temp_name.as_ref() {
+        // Process each section data
+        for (sectype, data_tuple) in &function.data {
+            let temp_name = &data_tuple.0;
+            let size = data_tuple.1;
+            
+            if let Some(temp_name) = temp_name {
                 if size == 0 {
                     continue;
                 }
@@ -183,16 +185,16 @@ pub fn fixup_objfile(
                     ObjFileError::SectionError(format!("Invalid section type: {}", sectype))
                 })?.push(SectionCopyData {
                     pos: loc.1 as usize,
-                    count: *size,
-                    temp_name: temp_name.clone(),
+                    count: size,
+                    temp_name: temp_name.to_string(),
                     fn_desc: function.fn_desc.clone(),
                 });
                 
                 if !function.text_glabels.is_empty() && sectype == ".text" {
-                    func_sizes.insert(function.text_glabels[0].clone(), *size);
+                    func_sizes.insert(function.text_glabels[0].clone(), size);
                 }
                 
-                let size_u32: u32 = (*size).try_into().map_err(|_| 
+                let size_u32: u32 = (size).try_into().map_err(|_| 
                     ObjFileError::ConversionError("size conversion failed".to_string()))?;
                 prev_locs.set(sectype, loc.1 + size_u32);
             }
@@ -205,8 +207,9 @@ pub fn fixup_objfile(
             late_rodata_asm.push(function.late_rodata_asm_conts.clone());
             
             // Add section labels and assembly
-            for (sectype, (temp_name, _)) in &function.data {
-                if let Some(temp_name) = temp_name.as_ref() {
+            for (sectype, data_tuple) in &function.data {
+                let temp_name = &data_tuple.0;
+                if let Some(temp_name) = temp_name {
                     asm.push(format!(".section {}", sectype));
                     asm.push(format!("glabel {}_asm_start", temp_name));
                 }
@@ -215,8 +218,9 @@ pub fn fixup_objfile(
             asm.push(".text".to_string());
             asm.extend(function.asm_conts.iter().cloned());
             
-            for (sectype, (temp_name, _)) in &function.data {
-                if let Some(temp_name) = temp_name.as_ref() {
+            for (sectype, data_tuple) in &function.data {
+                let temp_name = &data_tuple.0;
+                if let Some(temp_name) = temp_name {
                     asm.push(format!(".section {}", sectype));
                     asm.push(format!("glabel {}_asm_end", temp_name));
                 }
@@ -301,7 +305,7 @@ pub fn fixup_objfile(
                     assert!(!dummy_bytes_list.is_empty(), "should always have dummy bytes before jtbl data");
                     let pos_usize = pos as usize;
                     for i in 0..*jtbl_size {
-                        moved_late_rodata.insert(pos_usize + i, (prev_locs.rodata as usize + i));
+                        moved_late_rodata.insert(pos_usize + i, prev_locs.rodata as usize + i);
                         jtbl_rodata_positions.insert(prev_locs.rodata as usize + i);
                     }
                     pos += *jtbl_size as u32;
@@ -578,25 +582,35 @@ fn process_relocations(
     jtbl_rodata_positions: &HashSet<usize>,
     moved_late_rodata: &HashMap<usize, usize>,
 ) -> Result<()> {
-    for section in &mut objfile.sections {
+    let mut sections_to_process = Vec::new();
+    
+    // Collect sections to process first
+    for section in &objfile.sections {
         if section.sh_type != SHT_REL && section.sh_type != SHT_RELA {
             continue;
         }
+        sections_to_process.push((section.index, section.sh_info));
+    }
 
-        let target_section = objfile.sections.get(section.sh_info as usize)
-            .ok_or_else(|| ObjFileError::SectionError("Invalid relocation target section".to_string()))?;
-
+    // Process each section
+    for (section_idx, target_idx) in sections_to_process {
+        // Get target section info first
+        let target_name = {
+            let target_section = &objfile.sections[target_idx as usize];
+            target_section.name.clone()
+        };
+        
+        // Then process the relocation section
+        let section = &mut objfile.sections[section_idx];
+        
         let mut relocs = section.relocations.clone();
         relocs.retain(|rel| {
             let offset = u32_to_usize(rel.r_offset).unwrap_or(0);
-            !(target_section.name == ".text" && modified_text_positions.contains(&offset) ||
-              target_section.name == ".rodata" && jtbl_rodata_positions.contains(&offset))
+            !(target_name == ".text" && modified_text_positions.contains(&offset) ||
+              target_name == ".rodata" && jtbl_rodata_positions.contains(&offset))
         });
 
-        // Sort relocations by offset
         relocs.sort_by_key(|rel| rel.r_offset);
-
-        // Update section data
         section.data = relocs.iter()
             .flat_map(|r| r.to_bytes(&section.fmt))
             .collect();
@@ -629,6 +643,18 @@ impl ElfFile {
     fn find_section_mut(&mut self, name: &str) -> Option<&mut ElfSection> {
         self.sections.iter_mut().find(|s| s.name == name)
     }
+
+    fn get_strtab_mut(&mut self) -> Result<&mut ElfSection> {
+        self.sections.iter_mut()
+            .find(|s| s.name == ".strtab")
+            .ok_or_else(|| ObjFileError::SectionError("String table not found".to_string()))
+    }
+
+    fn get_symtab_mut(&mut self) -> Result<&mut ElfSection> {
+        self.sections.iter_mut()
+            .find(|s| s.name == ".symtab")
+            .ok_or_else(|| ObjFileError::SectionError("Symbol table not found".to_string()))
+    }
 }
 
 impl Relocation {
@@ -645,6 +671,17 @@ impl Hash for Symbol {
         self.st_info.hash(state);
         self.st_other.hash(state);
         self.st_shndx.hash(state);
+    }
+}
+
+impl PartialEq for Symbol {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name &&
+        self.st_value == other.st_value &&
+        self.st_size == other.st_size &&
+        self.st_info == other.st_info &&
+        self.st_other == other.st_other &&
+        self.st_shndx == other.st_shndx
     }
 }
 
