@@ -65,7 +65,7 @@ pub fn fixup_objfile(
     asm_prelude: &[u8],
     _assembler: &str,
     _output_enc: &str,
-    _drop_mdebug_gptab: bool,
+    drop_mdebug_gptab: bool,
     convert_statics: &str,
 ) -> Result<()> {
     // Create a temporary file for the assembly
@@ -88,6 +88,13 @@ pub fn fixup_objfile(
 
     // Read the object file
     let mut objfile = ElfFile::from_file(objfile_path)?;
+
+    // Drop .mdebug and .gptab sections if requested
+    if drop_mdebug_gptab {
+        objfile.sections.retain(|section| {
+            !section.name.starts_with(".mdebug") && !section.name.starts_with(".gptab")
+        });
+    }
 
     // Find temporary symbols
     for function in functions {
