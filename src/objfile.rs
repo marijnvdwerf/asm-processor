@@ -7,11 +7,7 @@ use tempfile::NamedTempFile;
 use crate::elf::{
     Symbol,
     constants::{
-        MIPS_DEBUG_ST_STATIC, MIPS_DEBUG_ST_STATIC_PROC, MIPS_DEBUG_ST_FILE,
-        MIPS_DEBUG_ST_STRUCT, MIPS_DEBUG_ST_UNION, MIPS_DEBUG_ST_ENUM,
-        MIPS_DEBUG_ST_BLOCK, MIPS_DEBUG_ST_PROC, MIPS_DEBUG_ST_END,
-        STT_FUNC, STT_OBJECT, STB_LOCAL, STB_GLOBAL, STV_DEFAULT,
-        SHT_REL, SHT_RELA
+        STB_LOCAL, SHT_REL, SHT_RELA
     }
 };
 
@@ -120,13 +116,13 @@ pub fn fixup_objfile(
     functions: &[Function],
     asm_prelude: &[u8],
     assembler: &str,
-    output_enc: &str,
+    _output_enc: &str,
     drop_mdebug_gptab: bool,
     convert_statics: &str,
 ) -> Result<()> {
     // Read the object file
     let mut objfile = ElfFile::from_file(objfile_path)?;
-    let fmt = objfile.fmt.clone();
+    let _fmt = objfile.fmt.clone();
 
     let mut prev_locs = PrevLocs::default();
     let mut to_copy: HashMap<String, Vec<SectionCopyData>> = SECTIONS.iter()
@@ -139,13 +135,13 @@ pub fn fixup_objfile(
     let mut all_late_rodata_dummy_bytes = Vec::new();
     let mut all_jtbl_rodata_size = Vec::new();
     let mut late_rodata_asm = Vec::new();
-    let mut modified_text_positions: HashSet<usize> = HashSet::new();
+    let modified_text_positions: HashSet<usize> = HashSet::new();
     let mut jtbl_rodata_positions: HashSet<usize> = HashSet::new();
     let mut moved_late_rodata: HashMap<usize, usize> = HashMap::new();
     
     // Process each function
     for function in functions {
-        let mut ifdefed = false;
+        let ifdefed = false;
         
         // Process each section data
         for (sectype, data_tuple) in &function.data {
@@ -278,7 +274,7 @@ pub fn fixup_objfile(
     if let (Some(start_name), Some(end_name)) = (late_rodata_source_name_start, late_rodata_source_name_end) {
         if let Some(source) = asm_objfile.find_section(".late_rodata") {
             let start_pos = asm_objfile.find_symbol_in_section(&start_name, source)?;
-            let end_pos = asm_objfile.find_symbol_in_section(&end_name, source)?;
+            let _end_pos = asm_objfile.find_symbol_in_section(&end_name, source)?;
             
             let mut pos = start_pos;
             for (dummy_bytes_list, jtbl_size) in all_late_rodata_dummy_bytes.iter().zip(all_jtbl_rodata_size.iter()) {
@@ -432,124 +428,6 @@ fn process_sections(
     Ok(())
 }
 
-/// Process symbols from .mdebug section
-fn process_mdebug_symbols(
-    objfile: &mut ElfFile,
-    convert_statics: &str,
-    objfile_name: &str,
-) -> Result<Vec<Symbol>> {
-    let mut new_syms = Vec::new();
-    
-    if let Some(mdebug_section) = objfile.find_section(".mdebug") {
-        let mut static_name_count = HashMap::new();
-        let symtab_section = &objfile.sections[objfile.symtab];
-        let strtab_section = &objfile.sections[symtab_section.sh_link as usize];
-        let mut strtab_index = strtab_section.data.len();
-        let mut new_strtab_data = Vec::new();
-
-        // Extract offsets from mdebug section
-        let ifd_max = objfile.fmt.unpack_u32(&mdebug_section.data[18*4..19*4])?;
-        let cb_fd_offset = objfile.fmt.unpack_u32(&mdebug_section.data[19*4..20*4])?;
-        let cb_sym_offset = objfile.fmt.unpack_u32(&mdebug_section.data[9*4..10*4])?;
-        let cb_ss_offset = objfile.fmt.unpack_u32(&mdebug_section.data[15*4..16*4])?;
-
-        // Process each symbol
-        for i in 0..ifd_max {
-            let offset = (cb_fd_offset + 18*4*i) as usize;
-            let iss_base = objfile.fmt.unpack_u32(&mdebug_section.data[offset + 2*4..offset + 3*4])?;
-            let isym_base = objfile.fmt.unpack_u32(&mdebug_section.data[offset + 4*4..offset + 5*4])?;
-            let csym = objfile.fmt.unpack_u32(&mdebug_section.data[offset + 5*4..offset + 6*4])?;
-
-            let mut scope_level = 0;
-            for j in 0..csym {
-                let offset2 = (cb_sym_offset + 12 * (isym_base + j)) as usize;
-                let iss = objfile.fmt.unpack_u32(&mdebug_section.data[offset2..offset2 + 4])?;
-                let value = objfile.fmt.unpack_u32(&mdebug_section.data[offset2 + 4..offset2 + 8])?;
-                let st_sc_index = objfile.fmt.unpack_u32(&mdebug_section.data[offset2 + 8..offset2 + 12])?;
-
-                let st = st_sc_index >> 26;
-                let sc = (st_sc_index >> 21) & 0x1f;
-
-                // Handle static symbols
-                if st == MIPS_DEBUG_ST_STATIC || st == MIPS_DEBUG_ST_STATIC_PROC {
-                    let symbol_name_offset = cb_ss_offset + iss_base + iss;
-                    let symbol_name = objfile.get_null_terminated_string(symbol_name_offset)?;
-                    
-                    let mut final_name = symbol_name.clone();
-                    if scope_level > 1 {
-                        let count = static_name_count.entry(symbol_name.clone())
-                            .and_modify(|c| *c += 1)
-                            .or_insert(1);
-                        final_name = format!("{}:{}", symbol_name, count);
-                    }
-                    
-                    let emitted_name = if convert_statics == "global-with-filename" {
-                        format!("{}:{}", objfile_name, final_name)
-                    } else {
-                        final_name
-                    };
-                    
-                    let section_name = match sc {
-                        1 => ".text",
-                        2 => ".data",
-                        3 => ".bss",
-                        15 => ".rodata",
-                        _ => continue,
-                    };
-                    
-                    let section = objfile.find_section(section_name)
-                        .ok_or_else(|| ObjFileError::SectionError(
-                            format!("Section not found: {}", section_name)
-                        ))?;
-                    
-                    let symtype = if sc == 1 { STT_FUNC } else { STT_OBJECT };
-                    let binding = if convert_statics == "global" || convert_statics == "global-with-filename" {
-                        STB_GLOBAL
-                    } else {
-                        STB_LOCAL
-                    };
-                    
-                    let sym = Symbol::from_parts(
-                        objfile.fmt.clone(),
-                        u32::try_from(strtab_index).map_err(|_| 
-                            ObjFileError::ConversionError("strtab_index conversion failed".to_string()))?,
-                        value,
-                        0,
-                        (binding << 4) | symtype,
-                        STV_DEFAULT,
-                        section.index as u16,
-                        section,
-                        emitted_name.clone(),
-                    )?;
-                    
-                    strtab_index += emitted_name.len() + 1;
-                    new_strtab_data.extend_from_slice(emitted_name.as_bytes());
-                    new_strtab_data.push(0);
-                    new_syms.push(sym);
-                }
-
-                // Update scope level
-                match st {
-                    MIPS_DEBUG_ST_FILE | MIPS_DEBUG_ST_STRUCT | MIPS_DEBUG_ST_UNION |
-                    MIPS_DEBUG_ST_ENUM | MIPS_DEBUG_ST_BLOCK | MIPS_DEBUG_ST_PROC |
-                    MIPS_DEBUG_ST_STATIC_PROC => scope_level += 1,
-                    MIPS_DEBUG_ST_END => scope_level -= 1,
-                    _ => {}
-                }
-            }
-            assert_eq!(scope_level, 0);
-        }
-
-        let strtab_idx = {
-            let symtab_section = &objfile.sections[objfile.symtab];
-            symtab_section.sh_link as usize
-        };
-        objfile.sections[strtab_idx].data.extend(&new_strtab_data);
-    }
-
-    Ok(new_syms)
-}
-
 fn process_symbols(
     objfile: &mut ElfFile,
     _convert_statics: &str,
@@ -630,37 +508,10 @@ impl ElfFile {
         &self.sections[self.symtab].symbols
     }
 
-    fn get_null_terminated_string(&self, offset: u32) -> Result<String> {
-        if let Some(strtab) = self.find_section(".strtab") {
-            let start = offset as usize;
-            let end = strtab.data[start..]
-                .iter()
-                .position(|&b| b == 0)
-                .map(|p| start + p)
-                .unwrap_or(strtab.data.len());
-            
-            String::from_utf8(strtab.data[start..end].to_vec())
-                .map_err(|e| ObjFileError::ConversionError(e.to_string()))
-        } else {
-            Err(ObjFileError::SectionError("String table not found".to_string()))
-        }
-    }
-
     fn find_section_mut(&mut self, name: &str) -> Option<&mut ElfSection> {
         self.sections.iter_mut().find(|s| s.name == name)
     }
 
-    fn get_strtab_mut(&mut self) -> Result<&mut ElfSection> {
-        self.sections.iter_mut()
-            .find(|s| s.name == ".strtab")
-            .ok_or_else(|| ObjFileError::SectionError("String table not found".to_string()))
-    }
-
-    fn get_symtab_mut(&mut self) -> Result<&mut ElfSection> {
-        self.sections.iter_mut()
-            .find(|s| s.name == ".symtab")
-            .ok_or_else(|| ObjFileError::SectionError("Symbol table not found".to_string()))
-    }
 }
 
 impl Relocation {
