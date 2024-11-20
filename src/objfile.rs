@@ -3,6 +3,17 @@ use std::io::{self, Write};
 use std::path::Path;
 use tempfile::NamedTempFile;
 
+use crate::elf::{
+    Symbol,
+    constants::{
+        MIPS_DEBUG_ST_STATIC, MIPS_DEBUG_ST_STATIC_PROC, MIPS_DEBUG_ST_FILE,
+        MIPS_DEBUG_ST_STRUCT, MIPS_DEBUG_ST_UNION, MIPS_DEBUG_ST_ENUM,
+        MIPS_DEBUG_ST_BLOCK, MIPS_DEBUG_ST_PROC, MIPS_DEBUG_ST_END,
+        STT_FUNC, STT_OBJECT, STB_LOCAL, STB_GLOBAL, STV_DEFAULT,
+        SHN_UNDEF, SHT_REL, SHT_RELA
+    }
+};
+
 use crate::elf::file::ElfFile;
 use crate::utils::Error as CrateError;
 use crate::asm::Function;
@@ -140,9 +151,11 @@ pub fn fixup_objfile(
                     .ok_or_else(|| ObjFileError::SymbolError(format!("Symbol not found: {}", temp_name)))?;
                 let prev_loc = prev_locs.get(sectype);
                 
-                if loc.1 < prev_loc {
+                let loc_usize = loc.1 as usize;
+                if loc_usize < prev_loc {
                     return Err(ObjFileError::SectionError(
-                        format!("Wrongly computed size for section {} (diff {})", sectype, prev_loc - loc.1)
+                        format!("Wrongly computed size for section {} (diff {})", 
+                               sectype, prev_loc - loc_usize)
                     ));
                 }
                 
@@ -247,10 +260,8 @@ pub fn fixup_objfile(
     // Process late rodata if present
     if let (Some(start_name), Some(end_name)) = (late_rodata_source_name_start, late_rodata_source_name_end) {
         if let Some(source) = asm_objfile.find_section(".late_rodata") {
-            let start_pos = asm_objfile.find_symbol_in_section(&start_name, source)
-                .ok_or_else(|| ObjFileError::SymbolError("Late rodata start symbol not found".to_string()))?;
-            let end_pos = asm_objfile.find_symbol_in_section(&end_name, source)
-                .ok_or_else(|| ObjFileError::SymbolError("Late rodata end symbol not found".to_string()))?;
+            let start_pos = asm_objfile.find_symbol_in_section(&start_name, source)?;
+            let end_pos = asm_objfile.find_symbol_in_section(&end_name, source)?;
             
             let mut pos = start_pos;
             for (dummy_bytes_list, jtbl_size) in all_late_rodata_dummy_bytes.iter().zip(all_jtbl_rodata_size.iter()) {
@@ -263,13 +274,11 @@ pub fn fixup_objfile(
                     if let Some(target) = objfile.find_section(".rodata") {
                         if let Some(found_pos) = find_bytes_in_section(&target.data, &bytes, prev_locs.rodata) {
                             // Handle double alignment for non-matching builds
-                            if index == 0 && dummy_bytes_list.len() > 1 {
-                                let next_four_bytes = &target.data[found_pos+4..found_pos+8];
-                                if next_four_bytes == &[0, 0, 0, 0] {
-                                    // Skip the alignment padding
-                                    pos += 4;
-                                    continue;
-                                }
+                            if index == 0 && dummy_bytes_list.len() > 1 && 
+                               target.data[found_pos+4..found_pos+8] == [0, 0, 0, 0] {
+                                // Skip alignment padding
+                                pos += 4;
+                                continue;
                             }
                             moved_late_rodata.insert(pos, found_pos as u32);
                             pos += 4;
@@ -278,6 +287,8 @@ pub fn fixup_objfile(
                 }
                 
                 if *jtbl_size > 0 {
+                    assert!(!dummy_bytes_list.is_empty(), "should always have dummy bytes before jtbl data");
+                    let pos_u = pos as usize;
                     for i in 0..*jtbl_size {
                         moved_late_rodata.insert(pos + i as u32, (prev_locs.rodata + i) as u32);
                         jtbl_rodata_positions.insert(prev_locs.rodata + i);
@@ -330,6 +341,9 @@ pub fn fixup_objfile(
     // Write back the modified object file
     objfile.write(objfile_path.to_str()
         .ok_or_else(|| ObjFileError::Io(io::Error::new(io::ErrorKind::Other, "Invalid output path")))?)
+        .map_err(|e| ObjFileError::from(e))?;
+
+    Ok(())
 }
 
 fn find_bytes_in_section(data: &[u8], pattern: &[u8], start_pos: usize) -> Option<usize> {
@@ -399,6 +413,7 @@ fn process_sections(
     Ok(())
 }
 
+/// Process symbols from .mdebug section
 fn process_mdebug_symbols(
     objfile: &mut ElfFile,
     convert_statics: &str,
@@ -407,34 +422,33 @@ fn process_mdebug_symbols(
     let mut new_syms = Vec::new();
     
     if let Some(mdebug_section) = objfile.find_section(".mdebug") {
-        if convert_statics == "no" {
-            return Ok(new_syms);
-        }
-
         let mut static_name_count = HashMap::new();
         let mut strtab_index = objfile.symtab.strtab.len();
         let mut new_strtab_data = Vec::new();
-        
+
+        // Extract offsets from mdebug section
         let (ifd_max, cb_fd_offset) = objfile.fmt.unpack_u32_pair(&mdebug_section.data[18*4..20*4]);
         let cb_sym_offset = objfile.fmt.unpack_u32(&mdebug_section.data[9*4..10*4]);
         let cb_ss_offset = objfile.fmt.unpack_u32(&mdebug_section.data[15*4..16*4]);
-        
+
+        // Process each symbol
         for i in 0..ifd_max {
             let offset = cb_fd_offset + 18*4*i;
             let (iss_base, _, isym_base, csym) = objfile.fmt.unpack_u32_quad(
                 &objfile.data[offset + 2*4..offset + 6*4]
             );
-            
+
             let mut scope_level = 0;
             for j in 0..csym {
                 let offset2 = cb_sym_offset + 12 * (isym_base + j);
                 let (iss, value, st_sc_index) = objfile.fmt.unpack_u32_triple(
                     &objfile.data[offset2..offset2 + 12]
                 );
-                
+
                 let st = st_sc_index >> 26;
                 let sc = (st_sc_index >> 21) & 0x1f;
-                
+
+                // Handle static symbols
                 if st == MIPS_DEBUG_ST_STATIC || st == MIPS_DEBUG_ST_STATIC_PROC {
                     let symbol_name_offset = cb_ss_offset + iss_base + iss;
                     let symbol_name = objfile.get_null_terminated_string(symbol_name_offset)?;
@@ -490,7 +504,8 @@ fn process_mdebug_symbols(
                     new_strtab_data.push(0);
                     new_syms.push(sym);
                 }
-                
+
+                // Update scope level
                 match st {
                     MIPS_DEBUG_ST_FILE | MIPS_DEBUG_ST_STRUCT | MIPS_DEBUG_ST_UNION |
                     MIPS_DEBUG_ST_ENUM | MIPS_DEBUG_ST_BLOCK | MIPS_DEBUG_ST_PROC |
@@ -501,10 +516,10 @@ fn process_mdebug_symbols(
             }
             assert_eq!(scope_level, 0);
         }
-        
+
         objfile.symtab.strtab.extend(&new_strtab_data);
     }
-    
+
     Ok(new_syms)
 }
 
